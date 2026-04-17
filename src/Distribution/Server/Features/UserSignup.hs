@@ -8,7 +8,7 @@ module Distribution.Server.Features.UserSignup (
     initUserSignupFeature,
     UserSignupFeature(..),
 
-    accountSuitableForPasswordReset
+    accountSuitableForPasswordReset,
   ) where
 
 import qualified Distribution.Server.Features.UserSignup.Acid as Acid

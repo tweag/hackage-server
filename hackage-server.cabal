@@ -281,6 +281,11 @@ library
     Distribution.Server.Users.AuthToken
     Distribution.Server.Users.UserIdSet
 
+    Distribution.Server.Database.Schemas
+    Distribution.Server.Database.Schemas.Users
+    Distribution.Server.Database.Schemas.Packages
+    Distribution.Server.Database.Schemas.Features
+
     Distribution.Server.Util.Histogram
     Distribution.Server.Util.CountingMap
     Distribution.Server.Util.CabalRevisions
@@ -571,6 +576,20 @@ executable hackage-import
     , HTTP
     , async
     , csv
+
+executable hackage-export
+  import: exe-defaults
+
+  main-is: ExportAcidState.hs
+
+  build-depends:
+      -- version constraints inherited from hackage-server
+    , acid-state
+    , containers
+    , filepath
+    , rel8
+    , text
+    , time
 
 ----------------------------------------------------------------------------
 
