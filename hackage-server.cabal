@@ -220,6 +220,7 @@ library
 
   exposed-modules:
     Data.Acid.Compat
+    Rel8.CreateTable
 
     Distribution.Server
 
