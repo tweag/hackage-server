@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving, TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE TypeApplications #-}
 module Distribution.Server.Users.Types (
     module Distribution.Server.Users.Types,
     module Distribution.Server.Users.AuthToken,
@@ -27,6 +28,10 @@ import Data.Aeson (ToJSON, FromJSON)
 import Data.SafeCopy (base, extension, deriveSafeCopy, Migrate(..))
 import Data.Hashable
 import Data.Serialize (Serialize)
+import Data.Coerce (coerce)
+import Data.Functor.Contravariant (contramap)
+import Data.Int (Int64)
+import Rel8 (DBType(..), encode, decode)
 
 
 newtype UserId = UserId Int
@@ -98,6 +103,21 @@ $(deriveSafeCopy 0 'base ''UserId)
 $(deriveSafeCopy 0 'base ''UserName)
 $(deriveSafeCopy 1 'base ''UserAuth)
 $(deriveSafeCopy 0 'base ''UserStatus)
+
+instance DBType UserId where
+  typeInformation =
+    let ti = typeInformation @Int64
+    in ti { encode = contramap (fromIntegral . coerce @UserId @Int) $ encode ti
+          , decode = fmap (UserId . fromIntegral) $ decode ti
+          }
+
+instance DBType UserName where
+  typeInformation =
+    let ti = typeInformation @T.Text
+    in ti { encode = contramap (T.pack . coerce) $ encode ti
+          , decode = fmap (UserName . T.unpack) $ decode ti
+          }
+
 $(deriveSafeCopy 0 'base ''UserInfo_v0)
 
 instance Migrate UserInfo where
