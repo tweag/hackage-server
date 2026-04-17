@@ -54,10 +54,15 @@ import Control.Arrow (second)
 import Data.Function (on)
 import qualified System.Log.Logger as HsLogger
 import Control.Exception.Lifted as Lifted
+import qualified Data.Text as T
 
 import qualified Hackage.Security.Util.Path as Sec
 
 import Paths_hackage_server (getDataDir)
+
+import Hasql.Connection as DB
+import qualified Hasql.Connection.Setting as DB
+import qualified Hasql.Connection.Setting.Connection as DB
 
 
 data ListenOn = ListenOn {
@@ -75,7 +80,8 @@ data ServerConfig = ServerConfig {
   confStaticDir :: FilePath,
   confTmpDir    :: FilePath,
   confCacheDelay:: Int,
-  confLiveTemplates :: Bool
+  confLiveTemplates :: Bool,
+  confDbString :: String
 } deriving (Show)
 
 confDbStateDir, confBlobStoreDir :: ServerConfig -> FilePath
@@ -108,7 +114,8 @@ defaultServerConfig = do
     confStaticDir = dataDir,
     confTmpDir    = "state" </> "tmp",
     confCacheDelay= 0,
-    confLiveTemplates = False
+    confLiveTemplates = False,
+    confDbString = "postgresql://sandy@/sandy"
   }
 
 data Server = Server {
@@ -128,7 +135,7 @@ hasSavedState = doesDirectoryExist . confDbStateDir
 mkServerEnv :: ServerConfig -> IO ServerEnv
 mkServerEnv config@(ServerConfig verbosity hostURI userContentURI requiredBaseHostHeader _
                                     stateDir _ tmpDir
-                                    cacheDelay liveTemplates) = do
+                                    cacheDelay liveTemplates dbString) = do
     createDirectoryIfMissing False stateDir
     let blobStoreDir  = confBlobStoreDir   config
         staticDir     = confStaticFilesDir config
@@ -138,6 +145,8 @@ mkServerEnv config@(ServerConfig verbosity hostURI userContentURI requiredBaseHo
     store   <- BlobStorage.open blobStoreDir
     cron    <- newCron verbosity
     tufDir  <- Sec.makeAbsolute $ Sec.fromFilePath tufDir'
+
+    Right conn <- DB.acquire $ pure $ DB.connection $ DB.string $ T.pack dbString
 
     let env = ServerEnv {
             serverStaticDir     = staticDir,
@@ -153,7 +162,8 @@ mkServerEnv config@(ServerConfig verbosity hostURI userContentURI requiredBaseHo
             serverBaseURI       = hostURI,
             serverUserContentBaseURI = userContentURI,
             serverRequiredBaseHostHeader = requiredBaseHostHeader,
-            serverVerbosity     = verbosity
+            serverVerbosity     = verbosity,
+            serverConnection    = conn
          }
     return env
 
