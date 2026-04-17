@@ -1,9 +1,14 @@
 {-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving, TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 module Distribution.Server.Framework.AuthTypes where
 
 import Distribution.Server.Framework.MemSize
 
 import Data.SafeCopy (base, deriveSafeCopy)
+import Data.Text (Text, pack, unpack)
+import Data.Coerce (coerce)
+import Data.Functor.Contravariant (contramap)
+import Rel8 (DBEq, DBOrd, DBType(..), encode, decode)
 
 -- | A plain, unhashed password. Careful what you do with them.
 --
@@ -18,7 +23,15 @@ newtype PasswdPlain = PasswdPlain String
 -- us to use either the basic or digest HTTP authentication methods.
 --
 newtype PasswdHash = PasswdHash String
-  deriving (Eq, Ord, Show, MemSize)
+  deriving (Eq, Ord, Show, MemSize, DBEq, DBOrd)
+
+
+instance DBType PasswdHash where
+  typeInformation =
+    let ti = typeInformation @Text
+    in ti { encode = contramap (pack . coerce) $ encode ti
+          , decode = fmap (PasswdHash . unpack) $ decode ti
+          }
 
 newtype RealmName = RealmName String
   deriving (Show, Eq)

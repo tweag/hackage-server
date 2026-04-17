@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeApplications #-}
 module Distribution.Server.Users.AuthToken
     ( AuthToken
     , parseAuthToken, parseAuthTokenM, renderAuthToken
@@ -23,6 +24,10 @@ import Distribution.Pretty (Pretty(..))
 import Distribution.Parsec (Parsec(..))
 import qualified Distribution.Compat.CharParsing as P
 
+import Data.ByteString (ByteString)
+import Data.Coerce (coerce)
+import Data.Functor.Contravariant (contramap)
+import Rel8 (DBType(..), encode, decode, DBEq, DBOrd)
 import Data.SafeCopy
 
 -- | Contains the original token which will be shown to the user
@@ -34,7 +39,7 @@ newtype OriginalToken = OriginalToken Nonce
 
 -- | Contains a hash of the original token
 newtype AuthToken = AuthToken BSS.ShortByteString
-    deriving (Eq, Ord, Read, Show, MemSize)
+    deriving (Eq, Ord, Read, Show, MemSize, DBEq, DBOrd)
 
 convertToken :: OriginalToken -> AuthToken
 convertToken (OriginalToken bs) =
@@ -78,6 +83,13 @@ instance Parsec AuthToken where
 
 instance Pretty AuthToken where
     pretty = Disp.text . T.unpack . renderAuthToken
+
+instance DBType AuthToken where
+  typeInformation =
+    let ti = typeInformation @ByteString
+    in ti { encode = contramap (BSS.fromShort . coerce) $ encode ti
+          , decode = fmap (AuthToken . BSS.toShort) $ decode ti
+          }
 
 instance SafeCopy AuthToken where
     putCopy (AuthToken bs) = contain $ safePut (BSS.fromShort bs)
