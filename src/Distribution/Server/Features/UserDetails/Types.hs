@@ -24,7 +24,7 @@ data AccountDetails = AccountDetails {
 
 
 data AccountKind = AccountKindRealUser | AccountKindSpecial
-  deriving (Eq, Show, Enum, Bounded)
+  deriving (Eq, Show, Enum, Bounded, Read)
 
 data NameAndContact = NameAndContact { ui_name  :: Text, ui_contactEmailAddress :: Text }
 data AdminInfo      = AdminInfo      { ui_accountKind :: Maybe AccountKind, ui_notes :: Text }

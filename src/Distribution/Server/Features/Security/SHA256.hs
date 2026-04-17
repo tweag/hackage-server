@@ -1,5 +1,6 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP          #-}
+{-# LANGUAGE BangPatterns     #-}
+{-# LANGUAGE CPP              #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- | SHA256 digest
 module Distribution.Server.Features.Security.SHA256 (
@@ -16,8 +17,9 @@ import           Control.DeepSeq
 import           Data.Aeson                            (ToJSON (toJSON))
 import qualified Data.ByteString                       as BS
 import qualified Data.ByteString.Base16                as B16
+import           Data.Functor.Contravariant            (contramap)
 import           Data.SafeCopy
-import           Data.Serialize                        as Ser
+import           Data.Serialize                        as Ser hiding (decode, encode)
 #if MIN_VERSION_binary(0,8,3)
 import           Data.ByteString.Builder.Extra         as BS
 #endif
@@ -26,6 +28,7 @@ import qualified Data.Binary.Put                       as Bin
 import qualified Data.ByteString.Char8                 as BS.Char8
 import qualified Data.ByteString.Lazy                  as BS.Lazy
 import qualified Data.Text.Encoding                    as T
+import Distribution.Server.Framework.DB
 
 -- cryptohash
 import qualified Crypto.Hash.SHA256                    as SHA256
@@ -41,6 +44,13 @@ data SHA256Digest = SHA256Digest {-# UNPACK #-} !Word64 {-# UNPACK #-} !Word64
 
 instance NFData SHA256Digest where
   rnf !_ = () -- 'SHA256Digest' has only strict primitive fields, hence WHNF==NF
+
+instance DBType SHA256Digest where
+  typeInformation =
+      let ti = typeInformation @BS.ByteString
+       in ti { encode = contramap sha256DigestBytes $ encode ti
+             , decode = fmap sha256digestFromBS $ decode ti
+             }
 
 -- internal convenience helper
 -- fails if input has wrong length; callers must ensure correct length
