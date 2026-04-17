@@ -19,7 +19,7 @@ module Distribution.Server.Packages.Types where
 
 import Distribution.Server.Prelude
 
-import Distribution.Server.Framework (FromReqURI(..))
+import Happstack.Server.Types (FromReqURI(..))
 import Distribution.Server.Users.Types (UserId(..))
 import Distribution.Server.Framework.BlobStorage (BlobId, BlobId_v0, BlobStorage)
 import Distribution.Server.Framework.Instances (PackageIdentifier_v0)
