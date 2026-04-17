@@ -18,6 +18,8 @@ import Happstack.Server.Types (HeaderPair(..), Response, rqHeaders, rqQuery, rqU
 
 import qualified Hackage.Security.Util.Path as Sec
 
+import Hasql.Connection (Connection)
+
 -- | The internal server environment as used by 'HackageFeature's.
 --
 -- It contains various bits of static information (and handles of
@@ -73,7 +75,10 @@ data ServerEnv = ServerEnv {
     -- increasing the time taken to update the cache we can push this further.
     serverCacheDelay :: Int,
 
-    serverVerbosity  :: Verbosity
+    serverVerbosity  :: Verbosity,
+
+    -- | A Hasql connection to the postgres backing store.
+    serverConnection :: Connection
 }
 
 getHost :: ServerMonad m => m (Maybe BS.ByteString)
