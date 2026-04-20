@@ -26,6 +26,8 @@ data DbConstraint table where
     -> TableSchema (foreign_table Name)
     -> (foreign_table Name -> Name a)
     -> DbConstraint table
+  AutoInc :: (table Name -> Name a) -> DbConstraint table
+
 
 
 -- | A table schema and its corresponding key constraints. A 'DbTable' can be
@@ -69,4 +71,12 @@ mkConstraints (TableSchema (QualifiedName table_name _) table) (FK here (TableSc
     , "("
     , nameToString $ there other
     , ")"
+    ]
+mkConstraints (TableSchema (QualifiedName table_name _) table) (AutoInc f) =
+  sql $ BS8.pack $ unwords
+    [ "ALTER TABLE"
+    , table_name
+    , "ALTER COLUMN"
+    , nameToString $ f table
+    , "ADD GENERATED ALWAYS AS IDENTITY"
     ]
