@@ -17,16 +17,28 @@ import           Rel8.Table.Verify (showCreateTable)
 import           Unsafe.Coerce (unsafeCoerce)
 
 
+-- | Whenever you see this type, you should think "a record field selector from
+-- a @table 'Name'@ record." Which is to say, a column in the table.
+type Selector table a = table Name -> Name a
+
+
 -- | A primary or foreign key constraint on a table.
 type DbConstraint :: ((Type -> Type) -> Type) -> Type
 data DbConstraint table where
-  PK :: (table Name -> Name a) -> DbConstraint table
+  -- | The given field selector is a primary key on the table.
+  PK :: Selector table a -> DbConstraint table
+  -- | The given field selector is a foreign key, pointing at the column given
+  -- by the second selector. We enforce that both columns have the same
+  -- (Haskell) type.
   FK
-    :: (table Name -> Name a)
+    :: Selector table a
     -> TableSchema (foreign_table Name)
-    -> (foreign_table Name -> Name a)
+    -> Selector foreign_table a
     -> DbConstraint table
-  AutoInc :: (table Name -> Name a) -> DbConstraint table
+-- | The given field selector should be marked as AUTOINCREMENT.
+  AutoInc :: Selector table a -> DbConstraint table
+-- | The given field selector should be given an index.
+  Index :: Selector table a -> DbConstraint table
 
 
 
@@ -47,6 +59,7 @@ makeTable (DbTable schema constraints) = do
 
 nameToString :: Name a -> String
 nameToString = unsafeCoerce
+
 
 mkConstraints :: TableSchema (table Name) -> DbConstraint table -> Session ()
 mkConstraints (TableSchema (QualifiedName table_name _) table) (PK f) =
@@ -79,4 +92,12 @@ mkConstraints (TableSchema (QualifiedName table_name _) table) (AutoInc f) =
     , "ALTER COLUMN"
     , nameToString $ f table
     , "ADD GENERATED ALWAYS AS IDENTITY"
+    ]
+mkConstraints (TableSchema (QualifiedName table_name _) table) (AutoInc f) =
+  sql $ BS8.pack $ unwords
+    [ "CREATE INDEX ON"
+    , table_name
+    , "("
+    , nameToString $ f table
+    , ")"
     ]
