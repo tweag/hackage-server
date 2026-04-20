@@ -28,31 +28,17 @@ module Distribution.Server.Database.Schemas.Users
   ( -- * Users table
     UsersRow(..)
   , usersSchema
-  , userId
-  , userName
-  , userEmail
-  , userRealName
-  , userAuth
-  , userEnabled
-  , userAccountKind
-  , userAdminNotes
-  , userCreatedTime
+  , usersTable
 
     -- * User roles junction table
   , UserRoleRow(..)
   , userRolesSchema
-  , userRoleId
-  , userRoleUserId
-  , userRoleRole
-  , userRoleAssignedTime
+  , userRolesTable
 
     -- * User auth tokens table
   , UserAuthTokenRow(..)
   , userAuthTokensSchema
-  , authTokenUserId
-  , authTokenToken
-  , authTokenDescription
-  , authTokenCreatedTime
+  , userAuthTokensTable
 
     -- * Role type
   , UserRole(..)
@@ -81,6 +67,7 @@ import Rel8
   , encode
   , decode
   )
+import Rel8.CreateTable
 
 -- ============================================================================
 -- Users Table
@@ -127,6 +114,12 @@ usersSchema = TableSchema
       , userCreatedTime = "user_created_time"
       }
   }
+
+usersTable :: DbTable UsersRow
+usersTable = DbTable usersSchema
+  [ PK userId
+  , AutoInc userId
+  ]
 
 -- ============================================================================
 -- User Roles Junction Table
@@ -185,6 +178,13 @@ userRolesSchema = TableSchema
       }
   }
 
+userRolesTable :: DbTable UserRoleRow
+userRolesTable = DbTable userRolesSchema
+  [ PK userRoleId
+  , AutoInc userRoleId
+  , FK userRoleUserId usersSchema userId
+  ]
+
 -- ============================================================================
 -- User Auth Tokens Table
 -- ============================================================================
@@ -214,3 +214,10 @@ userAuthTokensSchema = TableSchema
       , authTokenCreatedTime = "created_time"
       }
   }
+
+
+userAuthTokensTable :: DbTable UserAuthTokenRow
+userAuthTokensTable = DbTable userAuthTokensSchema
+  [ PK authTokenToken
+  , FK authTokenUserId usersSchema userId
+  ]
