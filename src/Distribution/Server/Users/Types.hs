@@ -27,6 +27,10 @@ import Data.Aeson (ToJSON, FromJSON)
 import Data.SafeCopy (base, extension, deriveSafeCopy, Migrate(..))
 import Data.Hashable
 import Data.Serialize (Serialize)
+import Data.Coerce (coerce)
+import Data.Functor.Contravariant (contramap)
+import Data.Int (Int64)
+import Rel8 (DBType(..), encode, decode, DBEq, DBOrd)
 
 
 newtype UserId = UserId Int
