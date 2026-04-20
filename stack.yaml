@@ -1,0 +1,23 @@
+snapshot: lts-24.37
+
+packages:
+- .
+
+extra-deps:
+- Cabal-3.14.2.0
+- Cabal-syntax-3.14.2.0
+- rel8-1.7.0.0
+- tar-0.7.0.0
+
+
+nix:
+  packages:
+    - pkg-config
+    - gd
+    - libpng
+    - libjpeg
+    - fontconfig
+    - postgresql
+    - expat
+
+
