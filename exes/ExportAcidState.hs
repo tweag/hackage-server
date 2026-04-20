@@ -1,6 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
 
 -- | Export tool: reads existing acid-state databases and emits SQL INSERT
@@ -11,10 +12,13 @@
 --
 module Main (main) where
 
+import Control.Exception (bracket)
+import Data.Foldable
 import Distribution.Server.Database.Schemas.Users
 import Distribution.Server.Database.Schemas.Packages
 import Distribution.Server.Database.Schemas.Features
 
+import Data.String (fromString)
 
 import Data.Acid (openLocalStateFrom, query)
 import Data.Int (Int32)
@@ -55,7 +59,13 @@ import Distribution.Server.Util.CountingMap
 import Distribution.Server.Util.Nonce
 import Distribution.Version (Version)
 
+import Hasql.Connection
+import qualified Hasql.Connection.Setting as DB
+import qualified Hasql.Connection.Setting.Connection as DB
+
+
 import qualified Data.ByteString.Lazy.Char8 as BS
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.IntMap as IntMap
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -69,10 +79,21 @@ import qualified Distribution.Server.Packages.PackageIndex as PackageIndex
 import qualified Distribution.Server.Users.UserIdSet as UserIdSet
 import qualified Distribution.Server.Users.Users as Users
 
-import Rel8 (Insert(..), OnConflict(..), Returning(..), lit, values, insert, showStatement)
+import Rel8 (Insert(..), OnConflict(..), Returning(..), lit, values, insert, showStatement, QualifiedName(..), TableSchema(..), Name)
+import qualified Rel8
 
 import System.Environment (getArgs)
 import System.FilePath ((</>))
+
+import Hasql.Session (run, sql, Session)
+
+import Rel8.Table.Verify (showCreateTable)
+import Unsafe.Coerce (unsafeCoerce)
+
+
+withConn :: [DB.Setting] -> (Connection -> IO a) ->  IO a
+withConn ss = bracket (acquire ss >>= either (error . show) pure) release
+
 
 
 main :: IO ()
@@ -81,8 +102,45 @@ main = do
     let stateDir = case args of
           [d] -> d
           _   -> "state"
-    sql <- exportAll stateDir
-    putStr sql
+    withConn (pure $ DB.connection $ DB.string "postgresql://sandy@/sandy") $ \conn -> do
+
+      let create_tables =
+            [ showCreateTable usersSchema
+            , showCreateTable userRolesSchema
+            , showCreateTable userAuthTokensSchema
+            , showCreateTable packagesSchema
+            , showCreateTable packageVersionsSchema
+            , showCreateTable packageMaintainersSchema
+            , showCreateTable packageTagsSchema
+            , showCreateTable tagAliasesSchema
+            , showCreateTable preferredVersionsSchema
+            , showCreateTable deprecatedVersionsSchema
+            , showCreateTable documentationSchema
+            , showCreateTable votesSchema
+            , showCreateTable buildReportsSchema
+            , showCreateTable downloadCountsSchema
+            , showCreateTable signupResetSchema
+            , showCreateTable userNotifyPrefsSchema
+            , showCreateTable adminLogSchema
+            , showCreateTable tarIndexCacheSchema
+            , showCreateTable analyticsPixelsSchema
+            , showCreateTable legacyPasswdsSchema
+            , showCreateTable haskellPlatformSchema
+            , showCreateTable vouchesSchema
+            , showCreateTable distrosSchema
+            , showCreateTable mirrorClientsSchema
+            ]
+
+      for_ create_tables $ flip run conn . sql . BS8.pack
+
+      flip run conn $ mkConstraints usersSchema $ PK userId
+      flip run conn $ mkConstraints userRolesSchema $ PK userRoleId
+      flip run conn $ mkConstraints userRolesSchema $ FK userRoleUserId usersSchema userId
+      pure ()
+
+
+--       sql <- exportAll stateDir
+--       putStr sql
 
 
 exportAll :: FilePath -> IO String
