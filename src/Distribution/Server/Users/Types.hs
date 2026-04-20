@@ -32,10 +32,11 @@ import Data.Coerce (coerce)
 import Data.Functor.Contravariant (contramap)
 import Data.Int (Int64)
 import Rel8 (DBType(..), encode, decode, DBEq, DBOrd)
+import Rel8.CreateTable (DBAutoInc)
 
 
 newtype UserId = UserId Int
-  deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Pretty, DBEq, DBOrd)
+  deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Pretty, DBEq, DBOrd, DBAutoInc)
 
 instance DBType UserId where
   typeInformation =

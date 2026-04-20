@@ -4,9 +4,11 @@
 module Rel8.CreateTable
   ( DbConstraint (..)
   , DbTable (..)
+  , DBAutoInc
   , makeTable
   ) where
 
+import Data.Int (Int16, Int32, Int64)
 import qualified Data.ByteString.Char8 as BS8
 import           Data.Foldable
 import           Data.Kind (Type)
@@ -36,11 +38,18 @@ data DbConstraint table where
     -> Selector foreign_table a
     -> DbConstraint table
 -- | The given field selector should be marked as AUTOINCREMENT.
-  AutoInc :: Selector table a -> DbConstraint table
+  AutoInc :: DBAutoInc a => Selector table a -> DbConstraint table
 -- | The given field selector should be given an index.
   Index :: Selector table a -> DbConstraint table
 
 
+class DBAutoInc a
+
+-- | This instance ought not exist, but is required for UserId right now
+instance DBAutoInc Int
+instance DBAutoInc Int16
+instance DBAutoInc Int32
+instance DBAutoInc Int64
 
 -- | A table schema and its corresponding key constraints. A 'DbTable' can be
 -- used to construct a table via 'makeTable'.
@@ -93,7 +102,7 @@ mkConstraints (TableSchema (QualifiedName table_name _) table) (AutoInc f) =
     , nameToString $ f table
     , "ADD GENERATED ALWAYS AS IDENTITY"
     ]
-mkConstraints (TableSchema (QualifiedName table_name _) table) (AutoInc f) =
+mkConstraints (TableSchema (QualifiedName table_name _) table) (Index f) =
   sql $ BS8.pack $ unwords
     [ "CREATE INDEX ON"
     , table_name
