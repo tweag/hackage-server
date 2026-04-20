@@ -22,73 +22,42 @@ module Distribution.Server.Database.Schemas.Packages
   ( -- * Packages table
     PackageRow(..)
   , packagesSchema
-  , packageId
-  , packageName
-  , packageLastUpdated
+  , packagesTable
 
     -- * Package versions table
   , PackageVersionRow(..)
   , packageVersionsSchema
-  , pvId
-  , pvPackageId
-  , pvVersion
-  , pvUploadedBy
-  , pvUploadTime
-  , pvTarballBlob
-  , pvCabalBlob
-  , pvIsCandidate
-  , pvMigrationFlag
 
     -- * Package maintainers table (combines maintainers, trustees, uploaders)
   , PackageMaintainerRow(..)
   , packageMaintainersSchema
-  , pmId
-  , pmPackageName
-  , pmUserId
-  , pmRole
-  , pmAssignedTime
 
     -- * Package tags table
   , PackageTagRow(..)
   , packageTagsSchema
-  , ptId
-  , ptPackageName
-  , ptTag
-  , ptAssignedTime
 
     -- * Tag aliases table
   , TagAliasRow(..)
   , tagAliasesSchema
-  , taId
-  , taTag
-  , taAlias
 
     -- * Package preferred versions table
   , PreferredVersionRow(..)
   , preferredVersionsSchema
-  , pvPrefPackageName
-  , pvPrefVersionRange
-  , pvPrefLastUpdated
 
     -- * Deprecated package versions table
   , DeprecatedVersionRow(..)
   , deprecatedVersionsSchema
-  , depId
-  , depPackageName
-  , depVersion
 
     -- * Package documentation table
   , DocumentationRow(..)
   , documentationSchema
-  , docId
-  , docPackageId
-  , docBlobId
-  , docStoredTime
 
     -- * Package maintenance role type
   , MaintainerRole(..)
   ) where
 
+import Distribution.Server.Database.Schemas.Users (usersSchema, UsersRow(userId))
+import Rel8.CreateTable
 import Distribution.Package (PackageName)
 import Distribution.Types.Version (Version)
 import Distribution.Server.Users.Types (UserId)
@@ -138,6 +107,11 @@ packagesSchema = TableSchema
       }
   }
 
+packagesTable :: DbTable PackageRow
+packagesTable = DbTable packagesSchema
+  [ PK packageId
+  ]
+
 -- ============================================================================
 -- Package Versions Table
 -- ============================================================================
@@ -183,6 +157,12 @@ packageVersionsSchema = TableSchema
       , pvMigrationFlag = "migration_flag"
       }
   }
+
+
+packageVersionsTable :: DbTable PackageVersionRow
+packageVersionsTable = DbTable packageVersionsSchema
+  [ PK pvId
+  ]
 
 -- ============================================================================
 -- Package Maintainers Table
@@ -240,6 +220,13 @@ packageMaintainersSchema = TableSchema
       , pmAssignedTime = "assigned_time"
       }
   }
+
+
+packageMaintainersTable :: DbTable PackageMaintainerRow
+packageMaintainersTable = DbTable packageMaintainersSchema
+  [ PK pmId
+  , FK pmUserId usersSchema userId
+  ]
 
 -- ============================================================================
 -- Package Tags Table
