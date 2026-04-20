@@ -168,7 +168,6 @@ packageTarballRevisionsSchema = TableSchema
 deriving via UserId instance DBType MetadataRevIx
 deriving via UserId instance DBType TarballRevIx
 
-
 -- ============================================================================
 -- Package Versions Table
 -- ============================================================================
@@ -214,6 +213,7 @@ packageVersionsSchema = TableSchema
       , pvMigrationFlag = "migration_flag"
       }
   }
+
 
 -- ============================================================================
 -- Package Maintainers Table

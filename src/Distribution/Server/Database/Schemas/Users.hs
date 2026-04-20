@@ -31,14 +31,17 @@ module Distribution.Server.Database.Schemas.Users
   , usersSchema
   , UserStatus (..)
   , activeUsers
+  , usersTable
 
     -- * User roles junction table
   , UserRoleRow(..)
   , userRolesSchema
+  , userRolesTable
 
     -- * User auth tokens table
   , UserAuthTokenRow(..)
   , userAuthTokensSchema
+  , userAuthTokensTable
 
     -- * Role type
   , UserRole(..)
@@ -63,6 +66,7 @@ import Rel8
   , TableSchema(..)
   , Column
   )
+import Rel8.CreateTable
 
 data UserStatus = Enabled | Disabled | Deleted
   deriving stock (Eq, Ord, Show, Read, Enum, Bounded)
@@ -120,6 +124,12 @@ activeUsers = do
   where_ $ userStatus user ==. lit Enabled
   pure user
 
+usersTable :: DbTable UsersRow
+usersTable = DbTable usersSchema
+  [ PK userId
+  , AutoInc userId
+  ]
+
 -- ============================================================================
 -- User Roles Junction Table
 -- ============================================================================
@@ -171,6 +181,13 @@ userRolesSchema = TableSchema
       }
   }
 
+userRolesTable :: DbTable UserRoleRow
+userRolesTable = DbTable userRolesSchema
+  [ PK userRoleId
+  , AutoInc userRoleId
+  , FK userRoleUserId usersSchema userId
+  ]
+
 -- ============================================================================
 -- User Auth Tokens Table
 -- ============================================================================
@@ -200,3 +217,10 @@ userAuthTokensSchema = TableSchema
       , authTokenCreatedTime = "created_time"
       }
   }
+
+
+userAuthTokensTable :: DbTable UserAuthTokenRow
+userAuthTokensTable = DbTable userAuthTokensSchema
+  [ PK authTokenToken
+  , FK authTokenUserId usersSchema userId
+  ]
