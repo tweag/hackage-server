@@ -176,6 +176,7 @@ common defaults
     , unordered-containers  ^>= 0.2.10
     , vector                ^>= 0.12 || ^>= 0.13.0.0
     , zlib                  ^>= 0.6.2  || ^>= 0.7.0.0
+    , hasql
 
 
 library
@@ -219,6 +220,7 @@ library
 
   exposed-modules:
     Data.Acid.Compat
+    Rel8.CreateTable
 
     Distribution.Server
 
@@ -232,6 +234,7 @@ library
     Distribution.Server.Framework.Cache
     Distribution.Server.Framework.Cron
     Distribution.Server.Framework.CSRF
+    Distribution.Server.Framework.DB
     Distribution.Server.Framework.Error
     Distribution.Server.Framework.Logging
     Distribution.Server.Framework.Feature
