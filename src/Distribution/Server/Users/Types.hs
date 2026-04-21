@@ -46,7 +46,14 @@ instance DBType UserId where
           }
 
 newtype UserName  = UserName String
-  deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Hashable, Serialize)
+  deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Hashable, Serialize, DBEq, DBOrd)
+
+instance DBType UserName where
+  typeInformation =
+    let ti = typeInformation @T.Text
+    in ti { encode = contramap (T.pack . coerce) $ encode ti
+          , decode = fmap (UserName . T.unpack) $ decode ti
+          }
 
 data UserInfo = UserInfo {
                   userName   :: !UserName,
@@ -111,13 +118,6 @@ $(deriveSafeCopy 0 'base ''UserId)
 $(deriveSafeCopy 0 'base ''UserName)
 $(deriveSafeCopy 1 'base ''UserAuth)
 $(deriveSafeCopy 0 'base ''UserStatus)
-
-instance DBType UserName where
-  typeInformation =
-    let ti = typeInformation @T.Text
-    in ti { encode = contramap (T.pack . coerce) $ encode ti
-          , decode = fmap (UserName . T.unpack) $ decode ti
-          }
 
 $(deriveSafeCopy 0 'base ''UserInfo_v0)
 

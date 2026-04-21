@@ -8,7 +8,7 @@ import Data.SafeCopy (base, deriveSafeCopy)
 import Data.Text (Text, pack, unpack)
 import Data.Coerce (coerce)
 import Data.Functor.Contravariant (contramap)
-import Rel8 (DBType(..), encode, decode)
+import Rel8 (DBEq, DBOrd, DBType(..), encode, decode)
 
 -- | A plain, unhashed password. Careful what you do with them.
 --
@@ -23,13 +23,8 @@ newtype PasswdPlain = PasswdPlain String
 -- us to use either the basic or digest HTTP authentication methods.
 --
 newtype PasswdHash = PasswdHash String
-  deriving (Eq, Ord, Show, MemSize)
+  deriving (Eq, Ord, Show, MemSize, DBEq, DBOrd)
 
-newtype RealmName = RealmName String
-  deriving (Show, Eq)
-
-$(deriveSafeCopy 0 'base ''PasswdPlain)
-$(deriveSafeCopy 0 'base ''PasswdHash)
 
 instance DBType PasswdHash where
   typeInformation =
@@ -37,4 +32,10 @@ instance DBType PasswdHash where
     in ti { encode = contramap (pack . coerce) $ encode ti
           , decode = fmap (PasswdHash . unpack) $ decode ti
           }
+
+newtype RealmName = RealmName String
+  deriving (Show, Eq)
+
+$(deriveSafeCopy 0 'base ''PasswdPlain)
+$(deriveSafeCopy 0 'base ''PasswdHash)
 

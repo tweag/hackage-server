@@ -27,7 +27,7 @@ import qualified Distribution.Compat.CharParsing as P
 import Data.ByteString (ByteString)
 import Data.Coerce (coerce)
 import Data.Functor.Contravariant (contramap)
-import Rel8 (DBType(..), encode, decode)
+import Rel8 (DBType(..), encode, decode, DBEq, DBOrd)
 import Data.SafeCopy
 
 -- | Contains the original token which will be shown to the user
@@ -39,7 +39,7 @@ newtype OriginalToken = OriginalToken Nonce
 
 -- | Contains a hash of the original token
 newtype AuthToken = AuthToken BSS.ShortByteString
-    deriving (Eq, Ord, Read, Show, MemSize)
+    deriving (Eq, Ord, Read, Show, MemSize, DBEq, DBOrd)
 
 convertToken :: OriginalToken -> AuthToken
 convertToken (OriginalToken bs) =
