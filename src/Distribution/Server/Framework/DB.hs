@@ -53,6 +53,14 @@ doSelect
 doSelect conn = flip run conn . statement () . Rel8.run . select
 
 
+doSelect1
+    :: Serializable exprs (FromExprs exprs)
+    => Connection
+    -> Query exprs
+    -> IO (Either SessionError (FromExprs exprs))
+doSelect1 conn = flip run conn . statement () . Rel8.run1 . select
+
+
 doSelectE
     :: Serializable exprs (FromExprs exprs)
     => Connection
