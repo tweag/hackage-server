@@ -1,7 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable, TypeFamilies, TemplateHaskell #-}
 module Distribution.Server.Features.UserDetails.Types where
 
-import Distribution.Server.Framework
+import Distribution.Server.Framework.MemSize
+import Distribution.Server.Framework.Instances
 
 import Data.SafeCopy (base, deriveSafeCopy)
 
