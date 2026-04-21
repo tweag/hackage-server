@@ -13,11 +13,11 @@ module Distribution.Server.Features.AnalyticsPixels.State
     , ReplaceAnalyticsPixelsState(..)
     ) where
 
+import Distribution.Server.Framework.Instances ()
 import Distribution.Server.Features.AnalyticsPixels.Types
 import Distribution.Package (PackageName)
 
 import Distribution.Server.Framework.MemSize (MemSize)
-import Distribution.Server.Users.State ()
 
 import Data.Map (Map)
 import qualified Data.Map.Strict as Map

@@ -11,7 +11,6 @@ import Distribution.Server.Features.Distro.Distributions
 import Distribution.Server.Users.Group (UserIdSet)
 import qualified Distribution.Server.Users.Group as Group
 import Distribution.Server.Users.Types (UserId)
-import Distribution.Server.Users.State ()
 import Distribution.Server.Framework.MemSize
 
 import Data.Acid     (Query, Update, makeAcidic)

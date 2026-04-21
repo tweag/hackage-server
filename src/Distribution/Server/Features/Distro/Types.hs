@@ -11,7 +11,6 @@ module Distribution.Server.Features.Distro.Types where
 import Distribution.Server.Framework (FromReqURI(..))
 import Distribution.Server.Framework.Instances ()
 import Distribution.Server.Framework.MemSize
-import Distribution.Server.Users.State()
 import Distribution.Server.Users.Group (UserIdSet)
 
 import qualified Data.Map as Map

@@ -3,6 +3,7 @@
 
 module Distribution.Server.Features.Votes.State where
 
+import Distribution.Server.Framework.Instances ()
 import Distribution.Server.Features.Votes.Types
 import Distribution.Server.Framework.MemSize
 
@@ -10,8 +11,6 @@ import Distribution.Package (PackageName)
 import Distribution.Server.Users.Types (UserId)
 import Distribution.Server.Users.UserIdSet (UserIdSet)
 import qualified Distribution.Server.Users.UserIdSet as UserIdSet
-
-import Distribution.Server.Users.State ()
 
 import Data.Map (Map)
 import qualified Data.Map as Map
