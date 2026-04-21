@@ -22,4 +22,3 @@ nix:
     - openssl
 
 allow-newer: true
-

@@ -29,9 +29,8 @@ module Distribution.Server.Framework.DB
     , DBType(..)
     , TypeInformation(..)
     , (>$<)
-    , asc
-    , desc
     , orderBy
+    , in_
     ) where
 
 import Data.Functor.Contravariant ((>$<))
