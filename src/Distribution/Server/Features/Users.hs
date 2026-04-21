@@ -1,5 +1,7 @@
-{-# LANGUAGE RankNTypes, NamedFieldPuns, RecordWildCards, RecursiveDo,
-             BangPatterns, OverloadedStrings, TemplateHaskell, FlexibleContexts #-}
+{-# LANGUAGE RankNTypes, NamedFieldPuns, RecordWildCards, RecursiveDo, BangPatterns, OverloadedStrings, TemplateHaskell, FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables                                                                                                          #-}
+{-# LANGUAGE TypeApplications                                                                                                             #-}
+
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Distribution.Server.Features.Users (
     initUserFeature,
@@ -9,15 +11,17 @@ module Distribution.Server.Features.Users (
     GroupResource(..),
   ) where
 
+import Data.Bool (bool)
+import Distribution.Server.Features.UserDetails.Types (AccountKind(..))
+import Distribution.Server.Users.AuthToken (parseAuthToken, viewOriginalToken, convertToken, generateOriginalToken)
 import Distribution.Server.Framework
-import Distribution.Server.Framework.BackupDump
 import Distribution.Server.Framework.Templating
 import qualified Distribution.Server.Framework.Auth as Auth
 
-import Distribution.Server.Users.Types
-import qualified Distribution.Server.Users.State as Acid
-import Distribution.Server.Users.Backup
-import qualified Distribution.Server.Users.Users as Acid
+import Distribution.Server.Users.Types (UserId(..), UserName(..), PasswdPlain(..), ErrUserNameClash(..), ErrNoSuchUserId(..), ErrDeletedUser(..), UserAuth(..), PasswdHash(..))
+
+import Distribution.Server.Database.Schemas.Users
+
 import qualified Distribution.Server.Users.Group as Group
 import Distribution.Server.Users.Group
          (UserGroup(..), GroupDescription(..), UserIdSet, nullDescription)
@@ -28,16 +32,19 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Function (fix)
 import Control.Applicative (optional)
 import Data.Aeson (toJSON)
 import Data.Aeson.TH
 import qualified Data.Text as T
+import Data.Time (getCurrentTime)
 
 import Distribution.Text (display, simpleParse)
 
 import Happstack.Server.Cookie (addCookie, mkCookie, CookieLife(Session))
+import Distribution.Server.Framework.DB
+import Hasql.Session (SessionError(QueryError))
 
 -- | A feature to allow manipulation of the database of users.
 --
@@ -72,19 +79,17 @@ data UserFeature = UserFeature {
     -- | A hook to override the default authentication error in particular
     -- circumstances.
     authFailHook       :: Hook Auth.AuthError (Maybe ErrorResponse),
-    -- | Retrieves the entire user base.
-    queryGetUserDb    :: forall m. MonadIO m => m Acid.Users,
 
     -- | Creates a Hackage 2 user credential.
     newUserAuth       :: UserName -> PasswdPlain -> UserAuth,
     -- Adds a user with a fresh name.
-    updateAddUser     :: forall m. MonadIO m => UserName -> UserAuth -> m (Either Acid.ErrUserNameClash UserId),
+    updateAddUser     :: forall m. MonadIO m => UserName -> UserAuth -> m (Either ErrUserNameClash UserId),
     -- Sets the account-enabled status of an existing user to True or False.
     updateSetUserEnabledStatus :: forall m. MonadIO m => UserId -> Bool
-                               -> m (Maybe (Either Acid.ErrNoSuchUserId Acid.ErrDeletedUser)),
+                               -> m (Maybe (Either ErrNoSuchUserId ErrDeletedUser)),
     -- Sets the credentials of an existing user.
     updateSetUserAuth :: forall m. MonadIO m => UserId -> UserAuth
-                      -> m (Maybe (Either Acid.ErrNoSuchUserId Acid.ErrDeletedUser)),
+                      -> m (Maybe (Either ErrNoSuchUserId ErrDeletedUser)),
 
     -- Adds a user to a group based on a "user" path component.
     --
@@ -97,10 +102,10 @@ data UserFeature = UserFeature {
     userNameInPath      :: forall m. MonadPlus m => DynamicPath -> m UserName,
     -- Lookup a `UserId` from a name, if the name exists.
     lookupUserName      :: UserName -> ServerPartE UserId,
-    -- Lookup full `UserInfo` from a name, if the name exists.
-    lookupUserNameFull  :: UserName -> ServerPartE (UserId, UserInfo),
-    -- Lookup full `UserInfo` from an id, if the id exists.
-    lookupUserInfo      :: UserId -> ServerPartE UserInfo,
+    -- Lookup full `(UsersRow Result)` from a name, if the name exists.
+    -- lookupUserNameFull  :: UserName -> ServerPartE (UserId, (UsersRow Result)),
+    -- Lookup full `(UsersRow Result)` from an id, if the id exists.
+    -- lookupUserInfo      :: UserId -> ServerPartE (UsersRow Result),
 
     -- | An action to change a password directly, using "password" and
     -- "repeat-password" form fields. Only admins and the user themselves
@@ -228,11 +233,7 @@ deriveJSON (compatAesonOptionsDropPrefix "ui_")  ''UserGroupResource
 
 -- TODO: add renaming
 initUserFeature :: ServerEnv -> IO (IO UserFeature)
-initUserFeature serverEnv@ServerEnv{serverStateDir, serverTemplatesDir, serverTemplatesMode} = do
-  -- Canonical state
-  usersState  <- usersStateComponent  serverStateDir
-  adminsState <- adminsStateComponent serverStateDir
-
+initUserFeature serverEnv@ServerEnv{serverTemplatesDir, serverTemplatesMode} = do
   -- Ephemeral state
   groupIndex   <- newMemStateWHNF emptyGroupIndex
 
@@ -257,8 +258,6 @@ initUserFeature serverEnv@ServerEnv{serverStateDir, serverTemplatesDir, serverTe
     --
     rec let (feature@UserFeature{groupResourceAt}, adminGroupDesc)
               = userFeature templates
-                            usersState
-                            adminsState
                             groupIndex
                             userAdded authFailHook groupChangedHook
                             adminG adminR
@@ -268,35 +267,7 @@ initUserFeature serverEnv@ServerEnv{serverStateDir, serverTemplatesDir, serverTe
 
     return feature
 
-usersStateComponent :: FilePath -> IO (StateComponent AcidState Acid.Users)
-usersStateComponent stateDir = do
-  st <- openLocalStateFrom (stateDir </> "db" </> "Users") Acid.initialUsers
-  return StateComponent {
-      stateDesc    = "List of users"
-    , stateHandle  = st
-    , getState     = query st Acid.GetUserDb
-    , putState     = update st . Acid.ReplaceUserDb
-    , backupState  = usersBackup
-    , restoreState = usersRestore
-    , resetState   = usersStateComponent
-    }
-
-adminsStateComponent :: FilePath -> IO (StateComponent AcidState Acid.HackageAdmins)
-adminsStateComponent stateDir = do
-  st <- openLocalStateFrom (stateDir </> "db" </> "HackageAdmins") Acid.initialHackageAdmins
-  return StateComponent {
-      stateDesc    = "Admins"
-    , stateHandle  = st
-    , getState     = query st Acid.GetHackageAdmins
-    , putState     = update st . Acid.ReplaceHackageAdmins . Acid.adminList
-    , backupState  = \_ (Acid.HackageAdmins admins) -> [csvToBackup ["admins.csv"] (groupToCSV admins)]
-    , restoreState = Acid.HackageAdmins <$> groupBackup ["admins.csv"]
-    , resetState   = adminsStateComponent
-    }
-
 userFeature :: Templates
-            -> StateComponent AcidState Acid.Users
-            -> StateComponent AcidState Acid.HackageAdmins
             -> MemState GroupIndex
             -> Hook () ()
             -> Hook Auth.AuthError (Maybe ErrorResponse)
@@ -305,9 +276,9 @@ userFeature :: Templates
             -> GroupResource
             -> ServerEnv
             -> (UserFeature, UserGroup)
-userFeature templates usersState adminsState
+userFeature templates
              groupIndex userAdded authFailHook groupChangedHook
-             adminGroup adminResource userFeatureServerEnv
+             adminGroup adminResource userFeatureServerEnv@ServerEnv {serverConnection}
   = (UserFeature {..}, adminGroupDesc)
   where
     userFeatureInterface = (emptyHackageFeature "users") {
@@ -325,10 +296,7 @@ userFeature templates usersState adminsState
               groupResource adminResource
             , groupUserResource adminResource
             ]
-      , featureState = [
-            abstractAcidStateComponent usersState
-          , abstractAcidStateComponent adminsState
-          ]
+      , featureState = [ ]
       , featureCaches = [
             CacheComponent {
               cacheDesc       = "user group index",
@@ -396,19 +364,46 @@ userFeature templates usersState adminsState
     -- Queries and updates
     --
 
-    queryGetUserDb :: MonadIO m => m Acid.Users
-    queryGetUserDb = queryState usersState Acid.GetUserDb
-
-    updateAddUser :: MonadIO m => UserName -> UserAuth -> m (Either Acid.ErrUserNameClash UserId)
-    updateAddUser uname auth = updateState usersState (Acid.AddUserEnabled uname auth)
+    updateAddUser :: MonadIO m => UserName -> UserAuth -> m (Either ErrUserNameClash UserId)
+    updateAddUser uname (UserAuth auth) =
+      liftIO (registerUser serverConnection uname auth True) >>= \case
+        Left _err ->
+          -- TODO(sandy): Here we assume that if the insert failed, it's due to
+          -- a constraint violation (rather than a more serious DB failure.)
+          pure $ Left ErrUserNameClash
+        Right uid -> pure $ Right uid
 
     updateSetUserEnabledStatus :: MonadIO m => UserId -> Bool
-                               -> m (Maybe (Either Acid.ErrNoSuchUserId Acid.ErrDeletedUser))
-    updateSetUserEnabledStatus uid isenabled = updateState usersState (Acid.SetUserEnabledStatus uid isenabled)
+                               -> m (Maybe (Either ErrNoSuchUserId ErrDeletedUser))
+    updateSetUserEnabledStatus uid isenabled = do
+      res <- liftIO $ doUpdate1 serverConnection $ Update
+        { target = usersSchema
+        , from = pure ()
+        , set = \_ user -> user { userStatus = lit $ bool Disabled Enabled isenabled }
+        , updateWhere = \_ user -> userId user ==. lit uid &&. userStatus user /=. lit Deleted
+        , returning =
+            Returning userStatus
+        }
+      pure $ case res of
+        Left _err -> Just $ Left ErrNoSuchUserId
+        Right Deleted -> Just $ Right ErrDeletedUser
+        Right _ -> Nothing
 
     updateSetUserAuth :: MonadIO m => UserId -> UserAuth
-                      -> m (Maybe (Either Acid.ErrNoSuchUserId Acid.ErrDeletedUser))
-    updateSetUserAuth uid auth = updateState usersState (Acid.SetUserAuth uid auth)
+                      -> m (Maybe (Either ErrNoSuchUserId ErrDeletedUser))
+    updateSetUserAuth uid (UserAuth auth) = do
+      res <- liftIO $ doUpdate1 serverConnection $ Update
+        { target = usersSchema
+        , from = pure ()
+        , set = \_ user -> user { userAuth = lit auth }
+        , updateWhere = \_ user -> userId user ==. lit uid
+        , returning =
+            Returning userStatus
+        }
+      pure $ case res of
+        Left _err -> Just $ Left ErrNoSuchUserId
+        Right Deleted -> Just $ Right ErrDeletedUser
+        Right _ -> Nothing
 
     --
     -- Authorisation: authentication checks and privilege checks
@@ -418,9 +413,8 @@ userFeature templates usersState adminsState
     guardAuthorisedWhenInAnyGroup [] =
         fail "Group list is empty, this is not meant to happen"
     guardAuthorisedWhenInAnyGroup groups = do
-        users <- queryGetUserDb
-        uid   <- guardAuthenticatedWithErrHook users
-        Auth.guardInAnyGroup users uid groups
+        uid   <- guardAuthenticatedWithErrHook
+        Auth.guardInAnyGroup uid groups
         return uid
 
     -- High level, all in one check that the client is authenticated as a
@@ -432,16 +426,14 @@ userFeature templates usersState adminsState
     -- As above but also return the identity of the client
     guardAuthorised :: [PrivilegeCondition] -> ServerPartE UserId
     guardAuthorised privconds = do
-        users <- queryGetUserDb
-        uid   <- guardAuthenticatedWithErrHook users
-        Auth.guardPriviledged users uid privconds
+        uid   <- guardAuthenticatedWithErrHook
+        Auth.guardPriviledged uid privconds
         return uid
 
     guardAuthorised' :: [PrivilegeCondition] -> ServerPartE Bool
     guardAuthorised' privconds = do
-        users <- queryGetUserDb
-        uid   <- guardAuthenticatedWithErrHook users
-        valid <- Auth.checkPriviledged users uid privconds
+        uid   <- guardAuthenticatedWithErrHook
+        valid <- Auth.checkPriviledged uid privconds
         return valid
 
     -- Simply check if the user is authenticated as some user, without any
@@ -449,8 +441,7 @@ userFeature templates usersState adminsState
     -- building block.
     guardAuthenticated :: ServerPartE UserId
     guardAuthenticated = do
-        users   <- queryGetUserDb
-        guardAuthenticatedWithErrHook users
+        guardAuthenticatedWithErrHook
 
     -- [Note about authentication & `authn` hint cookie]
     --
@@ -485,9 +476,9 @@ userFeature templates usersState adminsState
 
     -- As above but using the given userdb snapshot
     -- See note about "authn" cookie above
-    guardAuthenticatedWithErrHook :: Acid.Users -> ServerPartE UserId
-    guardAuthenticatedWithErrHook users = do
-        uid <- Auth.checkAuthenticated realm users userFeatureServerEnv
+    guardAuthenticatedWithErrHook :: ServerPartE UserId
+    guardAuthenticatedWithErrHook = do
+        uid <- Auth.checkAuthenticated realm userFeatureServerEnv
                    >>= either handleAuthError return
         addCookie Session (mkCookie "authn" "1")
         -- Set-Cookie:authn="1";Path=/;Version="1"
@@ -517,8 +508,7 @@ userFeature templates usersState adminsState
           Just "1" -> void guardAuthenticated
           _        -> pure ()
 
-        users <- queryGetUserDb
-        either (const Nothing) Just `fmap` Auth.checkAuthenticated Auth.hackageRealm users userFeatureServerEnv
+        either (const Nothing) Just `fmap` Auth.checkAuthenticated Auth.hackageRealm userFeatureServerEnv
 
     -- | Resources representing the collection of known users.
     --
@@ -532,12 +522,14 @@ userFeature templates usersState adminsState
 
     serveUsersGet :: DynamicPath -> ServerPartE Response
     serveUsersGet _ = do
-      userlist <- Acid.enumerateActiveUsers <$> queryGetUserDb
+      userlist <- doSelectE serverConnection $ do
+        user <- activeUsers
+        pure (userId user, userName user)
       let users = [ UserNameIdResource {
-                      ui_username = userName uinfo,
+                      ui_username = uname,
                       ui_userid   = uid
                     }
-                  | (uid, uinfo) <- userlist ]
+                  | (uid, uname) <- userlist ]
       return . toResponse $ toJSON users
 
     serveUserGet :: DynamicPath -> ServerPartE Response
@@ -555,12 +547,11 @@ userFeature templates usersState adminsState
     serveUserPut dpath = do
       guardAuthorised_ [InGroup adminGroup]
       username <- userNameInPath dpath
-      muid     <- updateState usersState $ Acid.AddUserDisabled username
-      case muid of
-        Left  Acid.ErrUserNameClash ->
-          errBadRequest "Username already exists"
-            [MText "Cannot create a new user account with that username because already exists"]
-        Right uid -> return . toResponse $
+      -- TODO(sandy): Is it OK to use a blank hash here? It should be
+      -- impossible to hash to empty, and the account is not yet enabled. Maybe
+      -- the password column should be nullable?
+      uid     <- registerUserE serverConnection username (PasswdHash "") False
+      return . toResponse $
           toJSON UserNameIdResource {
                    ui_username = username,
                    ui_userid   = uid
@@ -570,19 +561,23 @@ userFeature templates usersState adminsState
     serveUserDelete dpath = do
       guardAuthorised_ [InGroup adminGroup]
       uid  <- lookupUserName =<< userNameInPath dpath
-      merr <- updateState usersState $ Acid.DeleteUser uid
+      merr <- doDeleteE serverConnection $ Delete
+        { from = usersSchema
+        , using = pure ()
+        , deleteWhere = \_ user -> userId user ==. lit uid
+        , returning = Returning userId
+        }
       case merr of
-        Nothing -> noContent $ toResponse ()
+        [_] -> noContent $ toResponse ()
         --TODO: need to be able to delete user by name to fix this race condition
-        Just Acid.ErrNoSuchUserId -> errInternalError [MText "uid does not exist"]
+        [] -> errInternalError [MText "uid does not exist"]
+        _ -> errInternalError [MText "too many uids deleted! should be very impossible"]
 
     serveUserEnabledGet :: DynamicPath -> ServerPartE Response
     serveUserEnabledGet dpath = do
       guardAuthorised_ [InGroup adminGroup]
       (_uid, uinfo) <- lookupUserNameFull =<< userNameInPath dpath
-      let enabled = case userStatus uinfo of
-                      AccountEnabled _ -> True
-                      _                -> False
+      let enabled = userStatus uinfo == Enabled
       return . toResponse $ toJSON EnabledResource { ui_enabled = enabled }
 
     serveUserEnabledPut :: DynamicPath -> ServerPartE Response
@@ -590,12 +585,11 @@ userFeature templates usersState adminsState
       guardAuthorised_ [InGroup adminGroup]
       uid  <- lookupUserName =<< userNameInPath dpath
       EnabledResource enabled <- expectAesonContent
-      merr <- updateState usersState (Acid.SetUserEnabledStatus uid enabled)
-      case merr of
+      res <- updateSetUserEnabledStatus uid enabled
+      case res of
         Nothing -> noContent $ toResponse ()
-        Just (Left Acid.ErrNoSuchUserId) ->
-          errInternalError [MText "uid does not exist"]
-        Just (Right Acid.ErrDeletedUser) ->
+        Just (Left ErrNoSuchUserId) -> errInternalError [MText "uid does not exist"]
+        Just (Right ErrDeletedUser) ->
           errBadRequest "User deleted"
             [MText "Cannot disable account, it has already been deleted"]
 
@@ -611,15 +605,19 @@ userFeature templates usersState adminsState
       guardAuthorised_ [IsUserId uid, InGroup adminGroup]
       template <- getTemplate templates "manage.html"
       cacheControlWithoutETag [Private]
+      tokens <- doSelectE serverConnection $ do
+        token <- each userAuthTokensSchema
+        where_ $ authTokenUserId token ==. lit uid
+        pure (authTokenToken token, authTokenDescription token)
       ok $ toResponse $
         template
           [ "username" $= display (userName uinfo)
           , "tokens"   $=
               [ templateDict
                   [ templateVal "hash" (display authtok)
-                  , templateVal "description" desc
+                  , templateVal "description" $ fromMaybe "" desc
                   ]
-              | (authtok, desc) <- Map.toList (userTokens uinfo) ]
+              | (authtok, desc) <- tokens ]
           ]
 
     serveUserManagementPost :: DynamicPath -> ServerPartE Response
@@ -634,16 +632,32 @@ userFeature templates usersState adminsState
           template <- getTemplate templates "token-created.html"
           origTok  <- liftIO generateOriginalToken
           let storeTok = convertToken origTok
-          res <- updateState usersState (Acid.AddAuthToken uid storeTok desc)
-          case res of
-            Nothing ->
+          now <- liftIO getCurrentTime
+          mres <- liftIO $ doInsert_ serverConnection $ Insert
+            { into = userAuthTokensSchema
+            , rows = values $ pure @[] $ lit $ UserAuthTokenRow
+                { authTokenUserId = uid
+                , authTokenToken = storeTok
+                , authTokenDescription = Just desc
+                , authTokenCreatedTime = now
+                }
+            , onConflict = Abort
+            , returning = NoReturning
+            }
+          case mres of
+            Right () ->
               ok $ toResponse $
                 template
                   [ "username" $= display (userName uinfo)
                   , "token"    $= viewOriginalToken origTok
                   ]
-            Just Acid.ErrNoSuchUserId ->
+            Left QueryError{} ->
+              -- NOTE: here we assume that if the query failed, it's due
+              -- to an abort caused by a foreign key violation; which must
+              -- occur due to the uid not existing.
               errInternalError [MText "uid does not exist"]
+            Left _ ->
+              throwError internalServerErrorResponse
 
         "revoke-auth-token" -> do
           mauthToken <- parseAuthToken . T.pack <$> look "auth-token"
@@ -653,17 +667,21 @@ userFeature templates usersState adminsState
                           [MText "The auth token provided is malformed: "
                           ,MText err]
             Right authToken -> do
-              res <- updateState usersState (Acid.RevokeAuthToken uid authToken)
+              res <-
+                doDeleteE serverConnection $ Delete
+                  { from = userAuthTokensSchema
+                  , using = pure ()
+                  , deleteWhere = \_ token ->
+                      authTokenUserId token ==. lit uid &&. authTokenToken token ==. lit authToken
+                  , returning = Returning authTokenToken
+                  }
               case res of
-                Nothing ->
-                  ok $ toResponse $
-                    template [ "username" $= display (userName uinfo) ]
-                Just (Left Acid.ErrNoSuchUserId) ->
-                  errInternalError [MText "uid does not exist"]
-                Just (Right Acid.ErrTokenNotOwned) ->
+                [] ->
                   errBadRequest "Invalid auth token"
                     [MText "Cannot revoke this token, no such token."]
-
+                _ ->
+                  ok $ toResponse $
+                    template [ "username" $= display (userName uinfo) ]
         _ -> errBadRequest "Invalid form action" []
 
     --
@@ -676,23 +694,26 @@ userFeature templates usersState adminsState
     lookupUserName :: UserName -> ServerPartE UserId
     lookupUserName = fmap fst . lookupUserNameFull
 
-    lookupUserNameFull :: UserName -> ServerPartE (UserId, UserInfo)
+    lookupUserNameFull :: UserName -> ServerPartE (UserId, (UsersRow Result))
     lookupUserNameFull uname = do
-        users <- queryState usersState Acid.GetUserDb
-        case Acid.lookupUserName uname users of
-          Just u  -> return u
-          Nothing -> userLost "Could not find user: not presently registered"
+      users <- doSelectE serverConnection $ do
+        user <- activeUsers
+        where_ $ userName user ==. lit uname
+        pure user
+      case listToMaybe users of
+        Just u -> pure (userId u, u)
+        Nothing -> userLost "Could not find user: not presently registered"
       where userLost = errNotFound "User not found" . return . MText
             --FIXME: 404 is only the right error for operating on User resources
             -- not when users are being looked up for other reasons, like setting
             -- ownership of packages. In that case needs errBadRequest
 
-    lookupUserInfo :: UserId -> ServerPartE UserInfo
-    lookupUserInfo uid = do
-        users <- queryState usersState Acid.GetUserDb
-        case Acid.lookupUserId uid users of
-          Just uinfo -> return uinfo
-          Nothing    -> errInternalError [MText "user id does not exist"]
+    lookupUserInfo :: UserId -> ServerPartE (UsersRow Result)
+    lookupUserInfo uid =
+      doSelect1E serverConnection $ do
+        user <- activeUsers
+        where_ $ userId user ==. lit uid
+        pure user
 
     adminAddUser :: ServerPartE Response
     adminAddUser = do
@@ -716,17 +737,19 @@ userFeature templates usersState adminsState
       case simpleParse userNameStr of
         Nothing -> errBadRequest "Error registering user" [MText "Not a valid user name!"]
         Just uname -> do
-          let auth = newUserAuth uname password
-          muid <- updateState usersState $ Acid.AddUserEnabled uname auth
-          case muid of
-            Left Acid.ErrUserNameClash -> errForbidden "Error registering user" [MText "A user account with that user name already exists."]
-            Right _                     -> return uname
+          let UserAuth passwd = newUserAuth uname password
+          uname <$ registerUserE serverConnection uname passwd True
 
     -- Arguments: the auth'd user id, the user path id (derived from the :username)
     canChangePassword :: MonadIO m => UserId -> UserId -> m Bool
     canChangePassword uid userPathId = do
-        admins <- queryState adminsState Acid.GetAdminList
-        return $ uid == userPathId || (uid `Group.member` admins)
+        misAdmin <- liftIO $ doSelect serverConnection $ do
+          role <- each userRolesSchema
+          where_ $ userRoleUserId role ==. lit uid
+               &&. userRoleRole role ==. lit Admin
+          pure $ lit True
+        let isAdmin = either (const False) (not . null) misAdmin
+        return $ uid == userPathId || isAdmin
 
     --FIXME: this thing is a total mess!
     -- Do admins need to change user's passwords? Why not just reset passwords & (de)activate accounts.
@@ -738,13 +761,17 @@ userFeature templates usersState adminsState
         passwd2 <- look "repeat-password"
         when (passwd1 /= passwd2) $
           forbidChange "Copies of new password do not match or is an invalid password (ex: blank)"
-        let passwd = PasswdPlain passwd1
-            auth   = newUserAuth username passwd
-        res <- updateState usersState (Acid.SetUserAuth uid auth)
+        let plainpasswd = PasswdPlain passwd1
+            passwd   = newUserAuth username plainpasswd
+        res <- liftIO $ updateSetUserAuth uid passwd
+        -- 'doUpdateE' with a 'Returning' clause returns a list with one
+        -- element for each row updated. We use the returning clause to
+        -- exfiltrate whether the user has the deleted status; thus, we can
+        -- branch on the number and values of the results.
         case res of
-          Nothing -> return ()
-          Just (Left  Acid.ErrNoSuchUserId) -> errInternalError [MText "user id lookup failure"]
-          Just (Right Acid.ErrDeletedUser)  -> forbidChange "Cannot set passwords for deleted users"
+          Nothing -> pure ()
+          Just (Left ErrNoSuchUserId) -> errInternalError [MText "user id lookup failure"]
+          Just (Right ErrDeletedUser) -> forbidChange "Cannot set passwords for deleted users"
       where
         forbidChange = errForbidden "Error changing password" . return . MText
 
@@ -753,28 +780,58 @@ userFeature templates usersState adminsState
 
     ------ User group management
     adminGroupDesc :: UserGroup
-    adminGroupDesc = UserGroup {
-          groupDesc             = nullDescription { groupTitle = "Hackage admins" },
-          queryUserGroup        = queryState  adminsState   Acid.GetAdminList,
-          addUserToGroup        = updateState adminsState . Acid.AddHackageAdmin,
-          removeUserFromGroup   = updateState adminsState . Acid.RemoveHackageAdmin,
-          groupsAllowedToAdd    = [adminGroupDesc],
-          groupsAllowedToDelete = [adminGroupDesc]
-        }
+    adminGroupDesc = UserGroup
+      { groupDesc             = nullDescription { groupTitle = "Hackage admins" }
+      , queryUserGroup        = fmap (either (error . show) Group.fromList) $ doSelect serverConnection $ do
+            role <- each userRolesSchema
+            where_ $ userRoleRole role ==. lit Admin
+            -- do we need to filter out disabled admins?
+            pure $ userRoleUserId role
+      , addUserToGroup        = \uid -> do
+          now <- getCurrentTime
+          fmap (either (error . show) id) $ doInsert_ serverConnection $ Insert
+            { into = userRolesSchema
+            , rows = values $ pure @[] $ UserRoleRow
+              { userRoleId = unsafeDefault
+              , userRoleUserId = lit uid
+              , userRoleRole = lit Admin
+              , userRoleAssignedTime = lit now
+                }
+            , onConflict = Abort
+            , returning = NoReturning
+            }
+      , removeUserFromGroup = \uid ->
+          fmap (either (error . show) id) $ doDelete_ serverConnection $ Delete
+            { from = userRolesSchema
+            , using = pure ()
+            , deleteWhere = \_ role -> userRoleUserId role ==. lit uid
+            , returning = NoReturning
+            }
+      , groupsAllowedToAdd    = [adminGroupDesc]
+      , groupsAllowedToDelete = [adminGroupDesc]
+      }
 
     groupAddUser :: UserGroup -> DynamicPath -> ServerPartE ()
     groupAddUser group _ = do
         actorUid <- guardAuthorised (map InGroup (groupsAllowedToAdd group))
-        users <- queryState usersState Acid.GetUserDb
         muser <- optional $ look "user"
         reason <- optional $ look "reason"
         case muser of
             Nothing -> addError "Bad request (could not find 'user' argument)"
-            Just ustr -> case simpleParse ustr >>= \uname -> Acid.lookupUserName uname users of
-                Nothing      -> addError $ "No user with name " ++ show ustr ++ " found"
-                Just (uid,_) -> do
-                             liftIO $ addUserToGroup group uid
-                             runHook_ groupChangedHook (groupDesc group, True,actorUid,uid,fromMaybe "" reason)
+            Just ustr -> do
+              case simpleParse ustr of
+                Nothing ->
+                  addError $ "No user with name " ++ show ustr ++ " found"
+                Just uname -> do
+                  res <- doSelectE serverConnection $ do
+                    user <- activeUsers
+                    where_ $ userName user ==. lit uname
+                    pure $ userId user
+                  case listToMaybe res of
+                    Nothing      -> addError $ "No user with name " ++ show ustr ++ " found"
+                    Just uid -> do
+                      liftIO $ addUserToGroup group uid
+                      runHook_ groupChangedHook (groupDesc group, True,actorUid,uid,fromMaybe "" reason)
        where addError = errBadRequest "Failed to add user" . return . MText
 
     groupDeleteUser :: UserGroup -> DynamicPath -> ServerPartE ()
@@ -886,17 +943,20 @@ userFeature templates usersState adminsState
 
     serveUserGroupGet groupr dpath = do
       group    <- getGroup groupr dpath
-      userDb   <- queryGetUserDb
       userlist <- liftIO $ queryUserGroup group
+      usernames <- doSelectE serverConnection $ do
+        user <- activeUsers
+        where_ $ userId user `in_` fmap lit (Group.toList userlist)
+        pure (userId user, userName user)
       return . toResponse $ toJSON
           UserGroupResource {
             ui_title       = T.pack $ groupTitle (groupDesc group),
             ui_description = T.pack $ groupPrologue (groupDesc group),
             ui_members     = [ UserNameIdResource {
-                                 ui_username = Acid.userIdToName userDb uid,
+                                 ui_username = username,
                                  ui_userid   = uid
                                }
-                             | uid <- Group.toList userlist ]
+                             | (uid, username) <- usernames ]
           }
 
     --TODO: add serveUserGroupUserPost for the sake of the html frontend
@@ -961,3 +1021,43 @@ userFeature templates usersState adminsState
                      -> (Map String GroupDescription -> Map String GroupDescription)
                      -> GroupIndex -> GroupIndex
     adjustGroupIndex f g (GroupIndex a b) = GroupIndex (f a) (g b)
+
+registerUser
+    :: Connection
+    -> UserName
+    -> Auth.PasswdHash
+    -> Bool
+    -- ^ Enabled?
+    -> IO (Either SessionError UserId)
+registerUser conn uname passwd enabled = do
+  now <- getCurrentTime
+  doInsert1 conn $ Insert
+    { into = usersSchema
+    , rows = values $ pure @[] $ UsersRow
+        { userId = unsafeDefault
+        , userName = lit uname
+        , userEmail = lit Nothing
+        , userRealName = lit Nothing
+        , userAuth = lit passwd
+        , userStatus =  lit $ bool Disabled Enabled enabled
+        , userAccountKind = lit $ Just AccountKindRealUser
+        , userAdminNotes = lit ""
+        , userCreatedTime = lit now
+        }
+    , onConflict =
+        -- Do nothing, rather than abort, so that we can give a custom error message.
+        DoNothing
+    , returning = Returning userId
+    }
+
+registerUserE
+    :: Connection
+    -> UserName
+    -> Auth.PasswdHash
+    -> Bool
+    -- ^ Enabled?
+    -> ServerPartE UserId
+registerUserE conn uname passwd enabled = do
+  liftIO (registerUser conn uname passwd enabled) >>= \case
+    Left _ -> errForbidden "Error registering user" [MText "A user account with that user name already exists."]
+    Right uid -> pure uid

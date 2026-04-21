@@ -28,6 +28,7 @@
 module Distribution.Server.Database.Schemas.Users
   ( -- * Users table
     UsersRow(..)
+  , type User
   , usersSchema
   , UserStatus (..)
   , activeUsers
@@ -101,6 +102,8 @@ data UsersRow f = UsersRow
   }
   deriving stock (Generic)
   deriving anyclass (Rel8able)
+
+type User = UsersRow Result
 
 usersSchema :: TableSchema (UsersRow Name)
 usersSchema = TableSchema

@@ -34,8 +34,6 @@ module Distribution.Server.Framework.DB
     , TypeInformation(..)
     , Connection
     , (>$<)
-    , asc
-    , desc
     , orderBy
     , asc
     , desc
