@@ -9,7 +9,7 @@ import Prelude hiding (lookup)
 import Distribution.Pretty
 
 import Distribution.Server.Features.Tags.Types
-import Distribution.Server.Framework
+import Distribution.Server.Framework.MemSize
 import Distribution.Server.Packages.Types (UploadInfo, PkgInfo)
 import Distribution.Server.Users.Types (UserId)
 
