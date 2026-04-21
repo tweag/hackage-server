@@ -2,7 +2,7 @@ module Distribution.Server.Framework.AuthCrypt (
    PasswdPlain(..),
    PasswdHash(..),
    newPasswdHash,
-   checkBasicAuthInfo,
+   basicAuthInfoToHash,
    BasicAuthInfo(..),
    checkDigestAuthInfo,
    DigestAuthInfo(..),
@@ -39,9 +39,10 @@ data BasicAuthInfo = BasicAuthInfo {
        basicPasswd   :: PasswdPlain
      }
 
-checkBasicAuthInfo :: PasswdHash -> BasicAuthInfo -> Bool
-checkBasicAuthInfo hash (BasicAuthInfo realmName userName pass) =
-    newPasswdHash realmName userName pass == hash
+
+basicAuthInfoToHash :: BasicAuthInfo -> PasswdHash
+basicAuthInfoToHash (BasicAuthInfo realmName userName pass) =
+    newPasswdHash realmName userName pass
 
 ------------------
 -- HTTP Digest auth

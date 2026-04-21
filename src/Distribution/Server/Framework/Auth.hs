@@ -34,17 +34,18 @@ module Distribution.Server.Framework.Auth (
     probeAttemptedAuthMethod,
   ) where
 
+import Distribution.Server.Database.Schemas.Users
+import Control.Monad.Trans.Except (runExceptT, except)
 import qualified Data.Text as T
-import Distribution.Server.Users.Types (UserId, UserName(..), UserAuth(..), UserInfo)
+import Distribution.Server.Users.Types (UserId, UserName(..))
 import qualified Distribution.Server.Users.Types as Users
-import qualified Distribution.Server.Users.Users as Users
 import qualified Distribution.Server.Users.Group as Group
 import qualified Distribution.Server.Users.UserIdSet as UserIdSet
 import Distribution.Server.Framework.AuthCrypt
 import Distribution.Server.Framework.AuthTypes
 import Distribution.Server.Framework.Error
 import Distribution.Server.Framework.HtmlFormWrapper (rqRealMethod)
-import Distribution.Server.Framework.ServerEnv (ServerEnv(ServerEnv, serverRequiredBaseHostHeader), getHost)
+import Distribution.Server.Framework.ServerEnv (ServerEnv(ServerEnv, serverRequiredBaseHostHeader, serverConnection), getHost)
 
 import Happstack.Server
 
@@ -61,6 +62,7 @@ import qualified Text.ParserCombinators.ReadP as Parse
 import Data.Maybe (listToMaybe)
 import Data.List  (intercalate)
 import qualified Data.Text.Encoding as T
+import Distribution.Server.Framework.DB
 
 
 ------------------------------------------------------------------------
@@ -82,12 +84,12 @@ adminRealm   = RealmName "Hackage admin"
 --   * is a member of a given group of users who are permitted to perform
 --     certain privileged actions.
 --
-guardAuthorised :: RealmName -> Users.Users -> [PrivilegeCondition]
+guardAuthorised :: RealmName -> [PrivilegeCondition]
                 -> ServerEnv
                 -> ServerPartE UserId
-guardAuthorised realm users privconds env = do
-    uid <- guardAuthenticated realm users env
-    guardPriviledged users uid privconds
+guardAuthorised realm privconds env = do
+    uid <- guardAuthenticated realm env
+    guardPriviledged uid privconds
     return uid
 
 
@@ -100,15 +102,15 @@ guardAuthorised realm users privconds env = do
 -- It only checks the user is known, it does not imply that the user is
 -- authorised to do anything in particular, see 'guardAuthorised'.
 --
-guardAuthenticated :: RealmName -> Users.Users -> ServerEnv -> ServerPartE UserId
-guardAuthenticated realm users env = do
-    authres <- checkAuthenticated realm users env
+guardAuthenticated :: RealmName -> ServerEnv -> ServerPartE UserId
+guardAuthenticated realm env = do
+    authres <- checkAuthenticated realm env
     case authres of
       Left  autherr -> throwError =<< authErrorResponse realm autherr
       Right info    -> return info
 
-checkAuthenticated :: ServerMonad m => RealmName -> Users.Users -> ServerEnv -> m (Either AuthError UserId)
-checkAuthenticated realm users ServerEnv { serverRequiredBaseHostHeader } = do
+checkAuthenticated :: (ServerMonad m, MonadIO m) => RealmName -> ServerEnv -> m (Either AuthError UserId)
+checkAuthenticated realm ServerEnv { serverRequiredBaseHostHeader, serverConnection } = do
     mbHost <- getHost
     case mbHost of
        Just hostHeaderValue ->
@@ -122,12 +124,12 @@ checkAuthenticated realm users ServerEnv { serverRequiredBaseHostHeader } = do
   where
     goCheck = do
          req <- askRq
-         return $ case getHeaderAuth req of
-           Just (DigestAuth, ahdr) -> checkDigestAuth users       ahdr req
-           Just _ | plainHttp req  -> Left InsecureAuthError
-           Just (BasicAuth,  ahdr) -> checkBasicAuth  users realm ahdr
-           Just (AuthToken,  ahdr) -> checkTokenAuth  users       ahdr
-           Nothing                 -> Left NoAuthError
+         liftIO $ case getHeaderAuth req of
+           Just (DigestAuth, ahdr) -> checkDigestAuth serverConnection ahdr req
+           Just _ | plainHttp req  -> pure $ Left InsecureAuthError
+           Just (BasicAuth,  ahdr) -> checkBasicAuth serverConnection realm ahdr
+           Just (AuthToken,  ahdr) -> checkTokenAuth serverConnection ahdr
+           Nothing                 -> pure $ Left NoAuthError
 
 -- | Authentication methods supported by hackage-server.
 data AuthMethod
@@ -159,11 +161,11 @@ data PrivilegeCondition = InGroup    Group.UserGroup
                         | IsUserId   UserId
                         | AnyKnownUser
 
-guardInAnyGroup :: Users.Users -> UserId -> [Group.UserGroup] -> ServerPartE ()
-guardInAnyGroup _ _ [] =
+guardInAnyGroup :: UserId -> [Group.UserGroup] -> ServerPartE ()
+guardInAnyGroup _ [] =
   fail "Group list is empty, this is not meant to happen"
-guardInAnyGroup users uid groups = do
-  allok <- checkPriviledged users uid (map InGroup groups)
+guardInAnyGroup uid groups = do
+  allok <- checkPriviledged uid (map InGroup groups)
   let groupTitles = map (Group.groupTitle . Group.groupDesc) groups
       errMsg = "Access denied, you must be member of either of the following groups: "
                <> show groupTitles
@@ -179,27 +181,27 @@ guardInAnyGroup users uid groups = do
 -- It only checks if the user is in the privileged user group, it does not
 -- imply that the current client has been authenticated, see 'guardAuthorised'.
 --
-guardPriviledged :: Users.Users -> UserId -> [PrivilegeCondition] -> ServerPartE ()
-guardPriviledged users uid privconds = do
-  allok <- checkPriviledged users uid privconds
+guardPriviledged :: UserId -> [PrivilegeCondition] -> ServerPartE ()
+guardPriviledged uid privconds = do
+  allok <- checkPriviledged uid privconds
   when (not allok) $
     errForbidden "Forbidden" [MText "No access for this resource."]
 
-checkPriviledged :: MonadIO m => Users.Users -> UserId -> [PrivilegeCondition] -> m Bool
-checkPriviledged _users _uid [] = return False
+checkPriviledged :: MonadIO m => UserId -> [PrivilegeCondition] -> m Bool
+checkPriviledged _uid [] = return False
 
-checkPriviledged users uid (InGroup ugroup:others) = do
+checkPriviledged uid (InGroup ugroup:others) = do
   uset <- liftIO $ Group.queryUserGroup ugroup
   if UserIdSet.member uid uset
     then return True
-    else checkPriviledged users uid others
+    else checkPriviledged uid others
 
-checkPriviledged users uid (IsUserId uid':others) =
+checkPriviledged uid (IsUserId uid':others) =
   if uid == uid'
     then return True
-    else checkPriviledged users uid others
+    else checkPriviledged uid others
 
-checkPriviledged _ _ (AnyKnownUser:_) = return True
+checkPriviledged _ (AnyKnownUser:_) = return True
 
 
 ------------------------------------------------------------------------
@@ -266,16 +268,23 @@ plainHttp req
 --
 
 -- | Handle a auth request using an access token
-checkTokenAuth :: Users.Users -> BS.ByteString
-               -> Either AuthError UserId
-checkTokenAuth users ahdr = do
-    parsedToken <-
+checkTokenAuth :: Connection -> BS.ByteString
+               -> IO (Either AuthError UserId)
+checkTokenAuth conn ahdr = runExceptT $ do
+    parsedToken <- except $
       case Users.parseOriginalToken (T.decodeUtf8 ahdr) of
         Left _    -> Left BadApiKeyError
         Right tok -> Right (Users.convertToken tok)
-    (uid, uinfo) <- Users.lookupAuthToken parsedToken users ?! BadApiKeyError
-    _ <- getUserAuth uinfo ?! UserStatusError uid uinfo
-    return uid
+    mres <-
+      liftIO $ doSelect1 conn $ do
+        token <- each userAuthTokensSchema
+        where_ $ authTokenToken token ==. lit parsedToken
+        user <- activeUsers
+        where_ $ authTokenUserId token ==. userId user
+        pure $ userId user
+    case mres of
+      Left _err -> throwError BadApiKeyError
+      Right uid -> pure uid
 
 ------------------------------------------------------------------------
 -- Basic auth method
@@ -283,16 +292,21 @@ checkTokenAuth users ahdr = do
 
 -- | Use HTTP Basic auth to authenticate the client as an active enabled user.
 --
-checkBasicAuth :: Users.Users -> RealmName -> BS.ByteString
-               -> Either AuthError UserId
-checkBasicAuth users realm ahdr = do
-    authInfo     <- getBasicAuthInfo realm ahdr       ?! UnrecognizedAuthError
+checkBasicAuth :: Connection -> RealmName -> BS.ByteString
+               -> IO (Either AuthError UserId)
+checkBasicAuth conn realm ahdr = runExceptT $ do
+    authInfo     <- except $ getBasicAuthInfo realm ahdr       ?! UnrecognizedAuthError
     let uname    = basicUsername authInfo
-    (uid, uinfo) <- Users.lookupUserName uname users  ?! NoSuchUserError uname
-    uauth        <- getUserAuth uinfo                 ?! UserStatusError uid uinfo
-    let passwdhash = getPasswdHash uauth
-    guard (checkBasicAuthInfo passwdhash authInfo)    ?! PasswordMismatchError uid uinfo
-    return uid
+    mres <- liftIO $ doSelect1 conn $ do
+      user <- activeUsers
+      where_ $ userName user ==. lit uname
+      where_ $ userAuth user ==. lit (basicAuthInfoToHash authInfo)
+      pure $ userId user
+    case mres of
+      Left _err -> throwError FailedLookupError
+      Right uid -> pure uid
+
+
 
 getBasicAuthInfo :: RealmName -> BS.ByteString -> Maybe BasicAuthInfo
 getBasicAuthInfo realm authHeader
@@ -342,18 +356,22 @@ headerBasicAuthChallenge (RealmName realmName) =
 
 -- | Use HTTP Digest auth to authenticate the client as an active enabled user.
 --
-checkDigestAuth :: Users.Users -> BS.ByteString -> Request
-                -> Either AuthError UserId
-checkDigestAuth users ahdr req = do
-    authInfo     <- getDigestAuthInfo ahdr req         ?! UnrecognizedAuthError
+checkDigestAuth :: Connection -> BS.ByteString -> Request
+                -> IO (Either AuthError UserId)
+checkDigestAuth conn ahdr req = runExceptT $ do
+    authInfo     <- except $ getDigestAuthInfo ahdr req ?! UnrecognizedAuthError
     let uname    = digestUsername authInfo
-    (uid, uinfo) <- Users.lookupUserName uname users   ?! NoSuchUserError uname
-    uauth        <- getUserAuth uinfo                  ?! UserStatusError uid uinfo
-    let passwdhash = getPasswdHash uauth
-    guard (checkDigestAuthInfo passwdhash authInfo)    ?! PasswordMismatchError uid uinfo
-    -- TODO: if we want to prevent replay attacks, then we must check the
-    -- nonce and nonce count and issue stale=true replies.
-    return uid
+    mres <- liftIO $ doSelect1 conn $ do
+      user <- activeUsers
+      where_ $ userName user ==. lit uname
+      pure (userId user, userAuth user)
+    case mres of
+      Left _err -> throwError FailedLookupError
+      Right (uid, passwdhash) -> do
+        except $ guard (checkDigestAuthInfo passwdhash authInfo) ?! PasswordMismatchError uid
+        -- TODO: if we want to prevent replay attacks, then we must check the
+        -- nonce and nonce count and issue stale=true replies.
+        pure uid
 
 -- | retrieve the Digest auth info from the headers
 --
@@ -430,20 +448,6 @@ headerDigestAuthChallenge (RealmName realmName) = do
 
 
 ------------------------------------------------------------------------
--- Common
---
-
-getUserAuth :: UserInfo -> Maybe UserAuth
-getUserAuth userInfo =
-  case Users.userStatus userInfo of
-    Users.AccountEnabled auth -> Just auth
-    _                         -> Nothing
-
-getPasswdHash :: UserAuth -> PasswdHash
-getPasswdHash (UserAuth hash) = hash
-
-
-------------------------------------------------------------------------
 -- Errors
 --
 
@@ -451,9 +455,9 @@ data AuthError = NoAuthError
                | UnrecognizedAuthError
                | InsecureAuthError
                | NoSuchUserError       UserName
-               | UserStatusError       UserId UserInfo
-               | PasswordMismatchError UserId UserInfo
+               | PasswordMismatchError UserId
                | BadApiKeyError
+               | FailedLookupError
                | BadHost { actualHost :: Maybe BS.ByteString, oughtToBeHost :: String }
   deriving Show
 
