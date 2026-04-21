@@ -6,7 +6,6 @@
 
 module Distribution.Server.Features.Vouch (VouchFeature(..), initVouchFeature, judgeVouch) where
 
-import Distribution.Verbosity (normal)
 import Distribution.Server.Database.Schemas.Features (VouchRow(..), vouchesSchema)
 import Distribution.Server.Features.Vouch.Types
 import Control.Monad (when, join)
@@ -18,7 +17,7 @@ import Data.Time (UTCTime(..), addUTCTime, getCurrentTime, nominalDay, secondsTo
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Text.XHtml.Strict (prettyHtmlFragment, stringToHtml, li)
 
-import Distribution.Server.Framework ((</>), DynamicPath, HackageFeature, IsHackageFeature, IsHackageFeature(..), internalServerErrorResponse, lognotice)
+import Distribution.Server.Framework ((</>), DynamicPath, HackageFeature, IsHackageFeature, IsHackageFeature(..))
 import Distribution.Server.Framework (MessageSpan(MText), Method(..), Response, ServerEnv(..), ServerPartE)
 import Distribution.Server.Framework (emptyHackageFeature, errBadRequest)
 import Distribution.Server.Framework (featureDesc, featureReloadFiles, featureResources, featureState)
@@ -30,40 +29,7 @@ import Distribution.Server.Users.Types (UserId(..), UserInfo, UserName(..), user
 import Distribution.Server.Features.Upload(UploadFeature(..))
 import Distribution.Server.Features.Users (UserFeature(..))
 import Distribution.Simple.Utils (toUTF8LBS)
-import Rel8 hiding (null, run)
-import qualified Rel8 as Rel8
-import           Hasql.Connection (Connection)
-import           Hasql.Session (SessionError, statement, run)
-
-doSelect
-    :: Serializable exprs (FromExprs exprs)
-    => Connection
-    -> Query exprs
-    -> IO (Either SessionError [FromExprs exprs])
-doSelect conn = flip run conn . statement () . Rel8.run . select
-
-
-doSelectE
-    :: Serializable exprs (FromExprs exprs)
-    => Connection
-    -> Query exprs
-    -> ServerPartE [FromExprs exprs]
-doSelectE conn q = do
-  liftIO (doSelect conn q) >>= \case
-    Left err -> do
-      lognotice normal $ show err
-      throwError internalServerErrorResponse
-    Right a -> pure a
-
-doUpdate
-    :: Serializable exprs (FromExprs exprs)
-    => Connection
-    -> Update (Query exprs)
-    -> IO (Either SessionError [FromExprs exprs])
-doUpdate conn = flip run conn . statement () . Rel8.run . update
-
-doInsert :: Connection -> Insert a -> IO (Either SessionError ())
-doInsert conn = flip run conn . statement () . Rel8.run_ . insert
+import Distribution.Server.Framework.DB
 
 data VouchFeature =
   VouchFeature
