@@ -13,7 +13,7 @@
 --
 module Distribution.Server.Packages.PackageIndex (
     -- * Package index data type
-    PackageIndex,
+    PackageIndex(..),
 
     -- * Creating an index
     fromList,
