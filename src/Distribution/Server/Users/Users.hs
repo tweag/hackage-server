@@ -2,7 +2,7 @@
 {-# LANGUAGE TypeFamilies #-}
 module Distribution.Server.Users.Users (
     -- * Users type
-    Users,
+    Users(..),
 
     -- * Construction
     emptyUsers,

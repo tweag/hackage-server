@@ -18,7 +18,7 @@
 --
 module Distribution.Server.Framework.BlobStorage (
     BlobStorage,
-    BlobId,
+    BlobId(..),
     blobMd5,
     readBlobId,
     blobETag,
