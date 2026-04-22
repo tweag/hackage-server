@@ -18,7 +18,6 @@ import Distribution.Server.Framework.BackupRestore
 
 import Distribution.Server.Features.Core
 import Distribution.Server.Features.Upload
-import Distribution.Server.Features.Users
 
 import Distribution.Package
 

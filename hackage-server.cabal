@@ -176,6 +176,7 @@ common defaults
     , unordered-containers  ^>= 0.2.10
     , vector                ^>= 0.12 || ^>= 0.13.0.0
     , zlib                  ^>= 0.6.2  || ^>= 0.7.0.0
+    , hasql
 
 
 library
@@ -219,6 +220,7 @@ library
 
   exposed-modules:
     Data.Acid.Compat
+    Rel8.CreateTable
 
     Distribution.Server
 
@@ -274,12 +276,16 @@ library
     Distribution.Server.Pages.Util
 
     Distribution.Server.Users.Group
-    Distribution.Server.Users.State
     Distribution.Server.Users.Types
     Distribution.Server.Users.Backup
     Distribution.Server.Users.Users
     Distribution.Server.Users.AuthToken
     Distribution.Server.Users.UserIdSet
+
+    Distribution.Server.Database.Schemas
+    Distribution.Server.Database.Schemas.Users
+    Distribution.Server.Database.Schemas.Packages
+    Distribution.Server.Database.Schemas.Features
 
     Distribution.Server.Util.Histogram
     Distribution.Server.Util.CountingMap
@@ -388,7 +394,6 @@ library
       Distribution.Server.Features.Votes.State
       Distribution.Server.Features.Votes.Types
       Distribution.Server.Features.Vouch
-      Distribution.Server.Features.Vouch.State
       Distribution.Server.Features.Vouch.Types
       Distribution.Server.Features.RecentPackages
       Distribution.Server.Features.PreferredVersions
@@ -478,6 +483,8 @@ library
     , xmlgen                ^>= 0.6
     , xss-sanitize          ^>= 0.3.6
 
+    , rel8
+
   if !flag(minimal)
     build-depends: tokenize ^>= 0.3
 
@@ -565,6 +572,21 @@ executable hackage-import
     , HTTP
     , async
     , csv
+
+executable hackage-export
+  import: exe-defaults
+
+  main-is: ExportAcidState.hs
+
+  build-depends:
+      -- version constraints inherited from hackage-server
+    , acid-state
+    , containers
+    , filepath
+    , rel8
+    , text
+    , time
+    , hasql
 
 ----------------------------------------------------------------------------
 
