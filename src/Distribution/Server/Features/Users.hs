@@ -78,6 +78,8 @@ data UserFeature = UserFeature {
     -- | A hook to override the default authentication error in particular
     -- circumstances.
     authFailHook       :: Hook Auth.AuthError (Maybe ErrorResponse),
+    -- | Lookup users by Id
+    queryLookupUser    :: forall m t. (MonadIO m, Traversable t) => t UserId -> m (t User),
 
     -- | Creates a Hackage 2 user credential.
     newUserAuth       :: UserName -> PasswdPlain -> UserAuth,
@@ -362,6 +364,22 @@ userFeature templates
 
     -- Queries and updates
     --
+
+    queryLookupUser :: (MonadIO m, Traversable t) => t UserId -> m (t User)
+    queryLookupUser = unsafePartsOf $ \case
+      [] ->
+        -- Avoid a database query if we can help it!
+        pure []
+      uids -> do
+        mres <- liftIO $ doSelect serverConnection $ do
+          user <- each usersSchema
+          where_ $ userId user `in_` fmap lit uids
+          pure user
+        case mres of
+          Left err -> error $ show err
+          Right res -> pure res
+
+
 
     updateAddUser :: MonadIO m => UserName -> UserAuth -> m (Either ErrUserNameClash UserId)
     updateAddUser uname (UserAuth auth) =
