@@ -479,6 +479,8 @@ library
     , xmlgen                ^>= 0.6
     , xss-sanitize          ^>= 0.3.6
 
+    , rel8
+
   if !flag(minimal)
     build-depends: tokenize ^>= 0.3
 
