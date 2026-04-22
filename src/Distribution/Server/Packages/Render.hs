@@ -48,7 +48,6 @@ import Distribution.Types.LibraryVisibility (LibraryVisibility(LibraryVisibility
 import Distribution.Server.Framework.CacheControl (ETag)
 import Distribution.Server.Packages.Types
 import Distribution.Server.Packages.ModuleForest
-import qualified Distribution.Server.Users.Users as Users
 import Distribution.Server.Users.Types
 import Distribution.Utils.Path (getSymbolicPath)
 import Distribution.Utils.ShortText (fromShortText)
@@ -97,8 +96,8 @@ data PackageRender = PackageRender {
     rendOther        :: PackageDescription
 }
 
-doPackageRender :: Users.Users -> PkgInfo -> PackageRender
-doPackageRender users info = PackageRender
+doPackageRender :: PkgInfo -> PackageRender
+doPackageRender info = PackageRender
     { rendPkgId        = packageId'
     , rendDepends      = flatDependencies genDesc
     , rendLibName      = renderLibName
@@ -123,10 +122,10 @@ doPackageRender users info = PackageRender
     , rendChangeLog    = Nothing -- populated later
     , rendReadme       = Nothing -- populated later
     , rendUploadInfo   = let (utime, uid) = pkgOriginalUploadInfo info
-                         in (utime, Users.lookupUserId uid users)
+                         in (utime, error "Users.lookupUserId uid users")
     , rendUpdateInfo   = let maxrevision  = Vec.length (pkgMetadataRevisions info) - 1
                              (utime, uid) = pkgLatestUploadInfo info
-                             uinfo        = Users.lookupUserId uid users
+                             uinfo        = error "Users.lookupUserId uid users"
                          in if maxrevision > 0
                               then Just (maxrevision, utime, uinfo)
                               else Nothing

@@ -23,6 +23,12 @@ module Distribution.Server.Features.Core (
   ) where
 
 -- stdlib
+import Data.Functor.Identity (Identity(..))
+import Control.Arrow ((&&&))
+import qualified Data.Map.Strict as Map
+import Data.Map.Strict (Map)
+import qualified Data.Set as Set
+import Data.Set (Set)
 import qualified Codec.Compression.GZip                             as GZip
 import           Data.Aeson                                         (Value (..), toJSON)
 import qualified Data.Aeson.Key                                     as Key
@@ -50,10 +56,9 @@ import qualified Distribution.Server.Packages.Index                 as Packages.
 import           Distribution.Server.Packages.PackageIndex          (PackageIndex)
 import qualified Distribution.Server.Packages.PackageIndex          as PackageIndex
 import           Distribution.Server.Packages.Types
-import           Distribution.Server.Users.Types                    (UserId,
-                                                                     userName)
-import           Distribution.Server.Users.Users                    (lookupUserId,
-                                                                     userIdToName)
+import           Distribution.Server.Users.Types                    (UserId)
+import           Distribution.Server.Database.Schemas.Users (UsersRow(..))
+import           Distribution.Server.Framework.DB
 
 -- Cabal
 import           Distribution.Package
@@ -304,8 +309,7 @@ initCoreFeature env@ServerEnv{serverStateDir, serverCacheDelay,
       when migrateUpdateLog $ do
         -- Migrate Acid.PackagesState (introduce package update log)
         logTiming verbosity "migrating package update log" $ do
-          userdb <- queryGetUserDb users
-          updateState packagesState (Acid.MigrateAddUpdateLog userdb)
+          error "updateState packagesState (Acid.MigrateAddUpdateLog userdb)"
 
         -- Migrate PkgTarball
         logTiming verbosity "migrating PkgTarball" $
@@ -520,8 +524,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
                      -> CabalFileText -> UploadInfo
                      -> Maybe PkgTarball -> m Bool
     updateAddPackage pkgid cabalFile uploadinfo@(_, uid) mtarball = logTiming maxBound ("updateAddPackage " ++ display pkgid) $ do
-      usersdb <- queryGetUserDb
-      let Just userInfo = lookupUserId uid usersdb
+      Identity user <- queryGetUserDb $ Identity uid
 
       let pkginfo = Acid.mkPackageInfo pkgid cabalFile uploadinfo mtarball
       additionalEntries <- concat `liftM` runHook preIndexUpdateHook  (PackageChangeAdd pkginfo)
@@ -530,7 +533,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
         Acid.AddPackage3
           pkginfo
           uploadinfo
-          (userName userInfo)
+          (userName user)
           additionalEntries
 
       loginfo maxBound ("updateState(AddPackage3," ++ display pkgid ++ ") -> " ++ show successFlag)
@@ -550,14 +553,13 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     updateAddPackageRevision :: MonadIO m => PackageId -> CabalFileText -> UploadInfo -> m ()
     updateAddPackageRevision pkgid cabalfile uploadinfo@(_, uid) = logTiming maxBound ("updateAddPackageRevision " ++ display pkgid) $ do
-      usersdb <- queryGetUserDb
-      let Just userInfo = lookupUserId uid usersdb
+      Identity user <- queryGetUserDb $ Identity uid
       (moldpkginfo, newpkginfo) <- updateState packagesState $
         Acid.AddPackageRevision2
           pkgid
           cabalfile
           uploadinfo
-          (userName userInfo)
+          (userName user)
       loginfo maxBound ("updateState(AddPackageRevision2," ++ display pkgid ++ ") -> " ++ maybe "Nothing" (const "Just _") moldpkginfo)
       case moldpkginfo of
         Nothing ->
@@ -601,12 +603,12 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     --
     getIndexTarball :: IO IndexTarballInfo
     getIndexTarball = do
-      users <- queryGetUserDb  -- note, changes here don't automatically propagate
+      users <- queryGetUserDb $ error "ALL USER IDS" -- note, changes here don't automatically propagate
       time  <- getCurrentTime
       Acid.PackagesState index (Right updateSeq) <- queryState packagesState Acid.GetPackagesState
       let updateLog     = Foldable.toList updateSeq
           legacyTarball = Packages.Index.writeLegacy
-                            users
+                            (fmap userName users)
                             (Packages.Index.legacyExtras updateLog)
                             index
           incremTarball = Packages.Index.writeIncremental
@@ -727,10 +729,11 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     serveCabalFileRevisionsList :: DynamicPath -> ServerPartE Response
     serveCabalFileRevisionsList dpath = do
       pkginfo <- packageInPath dpath >>= lookupPackageId
-      users   <- queryGetUserDb
       let revisions = pkgMetadataRevisions pkginfo
-          revisionToObj rev (cabalFileText, (utime, uid)) =
-            let uname = userIdToName users uid
+          uids = Set.toList $ Set.fromList $ Vec.toList $ fmap (snd . snd) revisions
+      users <- liftIO $ fmap (Map.fromList . fmap (userId &&& id)) $ queryGetUserDb uids
+      let revisionToObj rev (cabalFileText, (utime, uid)) =
+            let uname = userName $ users Map.! uid
                 hash = sha256 (fromStrict $ cabalFileByteString cabalFileText)
             in
             Object $ KeyMap.fromList

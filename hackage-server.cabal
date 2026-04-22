@@ -277,8 +277,6 @@ library
 
     Distribution.Server.Users.Group
     Distribution.Server.Users.Types
-    Distribution.Server.Users.Backup
-    Distribution.Server.Users.Users
     Distribution.Server.Users.AuthToken
     Distribution.Server.Users.UserIdSet
 
@@ -587,6 +585,8 @@ executable hackage-export
     , text
     , time
     , hasql
+
+    -- Distribution.Server.Users.Users
 
 ----------------------------------------------------------------------------
 

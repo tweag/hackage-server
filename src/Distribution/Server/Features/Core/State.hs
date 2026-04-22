@@ -30,7 +30,6 @@ import qualified Distribution.Server.Packages.PackageIndex as PackageIndex
 import Distribution.Server.Packages.Types
 import Distribution.Server.Packages.Index
 import Distribution.Server.Users.Types (UserId, UserName(..), UserInfo(..))
-import Distribution.Server.Users.Users (Users, lookupUserId)
 import Distribution.Server.Framework.MemSize
 
 import Data.Acid     (Query, Update, makeAcidic)
@@ -235,10 +234,10 @@ replacePackagesState = State.put
 getPackagesState :: Query PackagesState PackagesState
 getPackagesState = ask
 
-migrateAddUpdateLog :: Users -> Update PackagesState ()
-migrateAddUpdateLog users = do
+migrateAddUpdateLog :: Update PackagesState ()
+migrateAddUpdateLog = do
     PackagesState pkgindex oldlog <- State.get
-    let !updatelog = initialUpdateLog (either id mempty oldlog) users pkgindex
+    let !updatelog = initialUpdateLog (either id mempty oldlog) pkgindex
     State.put $! PackagesState pkgindex (Right updatelog)
 
 -- | Construct the initial update log (migration)
@@ -260,8 +259,8 @@ migrateAddUpdateLog users = do
 --   interleaved with the cabal files.
 -- * We use a stable sort to make sure that when timestamps are equal,
 --   we keep .cabal files together with their TUF .json counterparts.
-initialUpdateLog :: ExtraFilesUpdateLog -> Users -> PackageIndex PkgInfo -> Seq TarIndexEntry
-initialUpdateLog oldExtras users pkgs =
+initialUpdateLog :: ExtraFilesUpdateLog -> PackageIndex PkgInfo -> Seq TarIndexEntry
+initialUpdateLog oldExtras pkgs =
       Seq.sortBy (comparing entryTimestamp) -- stable sort; see above
     $ Seq.fromList
     $ (extraEntries++)
@@ -288,7 +287,7 @@ initialUpdateLog oldExtras users pkgs =
         MetadataEntry pkgId revNo timestamp
 
     uidToName :: UserId -> UserName
-    uidToName uid = maybe (UserName "") userName (lookupUserId uid users)
+    uidToName uid = maybe (UserName "") userName (error "lookupUserId uid users")
 
     entryTimestamp :: TarIndexEntry -> UTCTime
     entryTimestamp (CabalFileEntry _ _ timestamp _ _) = timestamp

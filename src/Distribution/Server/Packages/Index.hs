@@ -20,8 +20,8 @@ import Distribution.Server.Packages.Types
          , pkgLatestCabalFileText, pkgLatestUploadInfo
          )
 import Distribution.Server.Packages.Metadata
-import Distribution.Server.Users.Users
-         ( Users, userIdToName )
+-- import Distribution.Server.Users.Users
+--          ( Users, userIdToName )
 import Distribution.Server.Users.Types
          ( UserId(..), UserName(..) )
 
@@ -170,24 +170,22 @@ legacyExtras = go Map.empty
 -- compression), contains at most one preferred-version per package (important
 -- because of a bug in cabal which would otherwise merge all preferred-versions
 -- files for a package), and does not contain the TUF files.
-writeLegacy :: Users -> Map String (LazyByteString, UTCTime) -> PackageIndex PkgInfo -> LazyByteString
+writeLegacy :: Map UserId UserName -> Map String (LazyByteString, UTCTime) -> PackageIndex PkgInfo -> LazyByteString
 writeLegacy users =
     writeLegacyAux (fromStrict . cabalFileByteString . pkgLatestCabalFileText) setModTime
   . extraEntries
   where
     setModTime pkgInfo entry =
-      let (utime, uuser) = pkgLatestUploadInfo pkgInfo in
+      let (utime, uid) = pkgLatestUploadInfo pkgInfo in
       entry {
         Tar.entryTime      = utcToUnixTime utime,
         Tar.entryOwnership = Tar.Ownership {
-          Tar.ownerName = userName uuser,
+          Tar.ownerName = maybe "<no user>" display $ Map.lookup uid users,
           Tar.groupName = "Hackage",
           Tar.ownerId = 0,
           Tar.groupId = 0
         }
       }
-
-    userName = display . userIdToName users
 
     extraEntries :: Map FilePath (LazyByteString, UTCTime) -> [Tar.Entry]
     extraEntries emap = do
