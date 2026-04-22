@@ -18,6 +18,7 @@ import Distribution.Server.Features.UserSignup.Types
 import Distribution.Server.Framework
 import Distribution.Server.Framework.Templating
 import Distribution.Server.Framework.BackupDump
+import Distribution.Server.Database.Schemas.Users
 
 import Distribution.Server.Features.Upload
 import Distribution.Server.Features.Users
@@ -28,7 +29,6 @@ import Distribution.Server.Users.Group
 import Distribution.Server.Users.Types
 import Distribution.Server.Util.Nonce
 import Distribution.Server.Util.Validators
-import qualified Distribution.Server.Users.Users as Users
 
 import qualified Data.Map as Map
 import Data.Text (Text)
@@ -411,7 +411,7 @@ userSignupFeature ServerEnv{serverBaseURI, serverCron}
           errBadRequest "Password mismatch"
             [MText $ "The two copies of the password did not match. "
                   ++ "Check and try again."]
-        errNameClash Users.ErrUserNameClash =
+        errNameClash ErrUserNameClash =
           errBadRequest "Account login name already taken"
             [MText $ "Sorry! In the time between requesting the account and "
                   ++ "now, the login username was registered by someone else. "
@@ -496,7 +496,7 @@ userSignupFeature ServerEnv{serverBaseURI, serverCron}
     handlerGetResetRequestOutstanding dpath = do
         nonce                    <- nonceInPath dpath
         ResetInfo{resetUserId}   <- lookupResetInfo nonce
-        uinfo@UserInfo{userName} <- lookupUserInfo resetUserId
+        uinfo@UsersRow{userName} <- lookupUserInfo resetUserId
         mudetails                <- queryUserDetails resetUserId
         AccountDetails{..}       <- guardSuitableAccountType uinfo mudetails
 
@@ -514,7 +514,7 @@ userSignupFeature ServerEnv{serverBaseURI, serverCron}
     handlerPostResetRequestOutstanding dpath = do
         nonce                    <- nonceInPath dpath
         ResetInfo{resetUserId}   <- lookupResetInfo nonce
-        uinfo@UserInfo{userName} <- lookupUserInfo resetUserId
+        uinfo@UsersRow{userName} <- lookupUserInfo resetUserId
         mudetails                <- queryUserDetails resetUserId
         AccountDetails{..}       <- guardSuitableAccountType uinfo mudetails
 
@@ -535,15 +535,15 @@ userSignupFeature ServerEnv{serverBaseURI, serverCron}
             [MText $ "The two copies of the password did not match. "
                   ++ "Check and try again."]
 
-        errDeleted (Right Users.ErrDeletedUser) =
+        errDeleted (Right ErrDeletedUser) =
           errForbidden "Account deleted"
             [MText "Cannot set a new password as the user account has just been deleted."]
-        errDeleted (Left Users.ErrNoSuchUserId) =
+        errDeleted (Left ErrNoSuchUserId) =
           errInternalError [MText "No such user id!"]
 
-accountSuitableForPasswordReset :: UserInfo -> AccountDetails -> Bool
+accountSuitableForPasswordReset :: User -> AccountDetails -> Bool
 accountSuitableForPasswordReset
-    (UserInfo { userStatus = AccountEnabled{} })
+    (UsersRow { userEnabled = True })
     (AccountDetails { accountKind = Just AccountKindRealUser })
                                     = True
 accountSuitableForPasswordReset _ _ = False

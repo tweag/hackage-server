@@ -14,15 +14,14 @@ import Distribution.Server.Features.UserDetails
 import Distribution.Server.Features.UserDetails.Types
 import Distribution.Server.Features.UserSignup
 
-import Distribution.Server.Users.Types
-import qualified Distribution.Server.Users.Users as Users
+import Distribution.Server.Users.Types (UserId, UserStatus(..), UserName(..), isActiveAccount)
+import Distribution.Server.Database.Schemas.Users
 import Distribution.Text
 import Distribution.Simple.Utils (lowercase)
 
 import Data.List
 import qualified Data.Text as T
 import Control.Applicative (optional)
-import Data.Maybe (isJust)
 
 
 -- | An HTML UI for various server admin tasks, mostly user accounts
@@ -105,8 +104,7 @@ adminFrontendFeature _env templates
         accounts    <- case findAccount of
                          Nothing          -> return []
                          Just searchTerms -> do
-                           users <- queryGetUserDb
-                           return (accountSearch users searchTerms)
+                           return (accountSearch searchTerms)
 
         findSignup <- optional (lookText' "find-signup")
         signups    <- case findSignup of
@@ -123,11 +121,11 @@ adminFrontendFeature _env templates
           , "signups"     $= map signupRequestToTemplate signups
           ]
       where
-        accountSearch users searchTerms =
+        accountSearch searchTerms =
           [ (uid, uinfo)
           | let terms = map lowercase (words searchTerms)
-          , (uid, uinfo@UserInfo{ userName = UserName uname })
-              <- Users.enumerateAllUsers users
+          , (uid, uinfo@UsersRow{ userName = UserName uname })
+              <- undefined -- Users.enumerateAllUsers users
           , any (`isInfixOf` lowercase uname) terms ]
 
         signupSearch allSignupInfo searchTerms =
@@ -157,7 +155,7 @@ adminFrontendFeature _env templates
         guardAuthorised_ [InGroup adminGroup]
         cacheControlWithoutETag [Private]
         template <- getTemplate templates "accounts.html"
-        accounts <- Users.enumerateAllUsers <$> queryGetUserDb
+        accounts <- undefined -- Users.enumerateAllUsers <$> queryGetUserDb
         ok $ toResponse $ template
           [ "accounts" $= [ accountBasicInfoToTemplate uid uinfo
                           | (uid, uinfo) <- accounts ]
@@ -179,16 +177,15 @@ adminFrontendFeature _env templates
         guardAuthorised_ [InGroup adminGroup]
         cacheControlWithoutETag [Private]
         template     <- getTemplate templates "resets.html"
-        usersdb      <- queryGetUserDb
         allResetInfo <- queryAllSignupResetInfo
         ok $ toResponse $ template
           [ "resets" $= [ resetRequestToTemplate resetInfo uinfo
                         | resetInfo@ResetInfo {resetUserId} <- allResetInfo
-                        , let Just uinfo = Users.lookupUserId resetUserId usersdb
+                        , let Just uinfo = error "Users.lookupUserId resetUserId usersdb"
                         ]
           ]
 
-    resetRequestToTemplate :: SignupResetInfo -> UserInfo -> TemplateVal
+    resetRequestToTemplate :: SignupResetInfo -> User -> TemplateVal
     resetRequestToTemplate ResetInfo {nonceTimestamp, resetUserId} uinfo =
       templateDict
         [ templateVal "timestamp" nonceTimestamp
@@ -217,6 +214,7 @@ adminFrontendFeature _env templates
           | ResetInfo { resetUserId, nonceTimestamp }  <- allResetInfo
           , resetUserId == uid ]
 
+    accountBasicInfoToTemplate :: UserId -> User -> TemplateVal
     accountBasicInfoToTemplate uid uinfo =
       templateDict
         [ templateVal "id"      (display uid)
@@ -259,3 +257,5 @@ adminFrontendFeature _env templates
     showAccountKind AccountKindRealUser = "RealUser"
     showAccountKind AccountKindSpecial  = "Special"
 
+userStatus :: User -> UserStatus
+userStatus = undefined

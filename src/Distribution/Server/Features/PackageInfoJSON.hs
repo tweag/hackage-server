@@ -47,7 +47,7 @@ import Data.Traversable (for)
 import qualified Data.List as List
 import Data.Time (UTCTime)
 import Distribution.Server.Users.Types (UserName (..), UserInfo(..))
-import Distribution.Server.Features.Users (UserFeature(lookupUserInfo))
+import Distribution.Server.Features.Users (UserFeature())
 
 data PackageBasicDescription = PackageBasicDescription
   { pbd_license           :: !License
@@ -264,7 +264,7 @@ servePackageBasicDescription resource userFeature preferred dpath = do
       let cabalFile = metadataRevs Vector.! metadataInd
           uploadedAt = fst $ uploadInfos Vector.! metadataInd
           uploaderId = snd $ uploadInfos Vector.! metadataInd
-      uploader <- userName <$> lookupUserInfo userFeature uploaderId
+      uploader <- error "userName <$> lookupUserInfo userFeature uploaderId"
       let pkgDescr  = getBasicDescription uploadedAt cabalFile metadataInd
       case pkgDescr of
         Left e  -> Framework.errInternalError [Framework.MText e]

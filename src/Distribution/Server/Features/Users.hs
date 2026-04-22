@@ -104,9 +104,9 @@ data UserFeature = UserFeature {
     -- Lookup a `UserId` from a name, if the name exists.
     lookupUserName      :: UserName -> ServerPartE UserId,
     -- Lookup full `(UsersRow Result)` from a name, if the name exists.
-    -- lookupUserNameFull  :: UserName -> ServerPartE (UserId, (UsersRow Result)),
+    lookupUserNameFull  :: UserName -> ServerPartE (UserId, (UsersRow Result)),
     -- Lookup full `(UsersRow Result)` from an id, if the id exists.
-    -- lookupUserInfo      :: UserId -> ServerPartE (UsersRow Result),
+    lookupUserInfo      :: UserId -> ServerPartE (UsersRow Result),
 
     -- | An action to change a password directly, using "password" and
     -- "repeat-password" form fields. Only admins and the user themselves

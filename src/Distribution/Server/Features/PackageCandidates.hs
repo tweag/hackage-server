@@ -1,4 +1,6 @@
 {-# LANGUAGE RankNTypes, NamedFieldPuns, RecordWildCards, LambdaCase #-}
+{-# LANGUAGE TypeApplications                                        #-}
+
 module Distribution.Server.Features.PackageCandidates (
     PackageCandidatesFeature(..),
     PackageCandidatesResource(..),
@@ -24,7 +26,6 @@ import Distribution.Server.Packages.Render
 import Distribution.Server.Packages.ChangeLog
 import Distribution.Server.Packages.Readme
 import qualified Distribution.Server.Users.Types as Users
-import qualified Distribution.Server.Users.Users as Users
 import qualified Distribution.Server.Users.Group as Group
 import qualified Distribution.Server.Framework.BlobStorage as BlobStorage
 import qualified Distribution.Server.Packages.PackageIndex as PackageIndex
@@ -279,8 +280,7 @@ candidatesFeature ServerEnv{serverBlobStore = store}
         pkgname <- packageInPath dpath
         pkgs <- lookupCandidateName pkgname
 
-        users  <- queryGetUserDb
-        let lupUserName uid = (uid, fmap Users.userName (Users.lookupUserId uid users))
+        let lupUserName uid = (uid, fmap @[] Users.userName (error "Users.lookupUserId uid users"))
 
         let pvs = [ object [ Key.fromString "version"  .= (T.pack . display . packageVersion . candInfoId) p
                            , Key.fromString "sha256"   .= (blobInfoHashSHA256 . pkgTarballGz . fst) tarball
@@ -526,14 +526,13 @@ candidatesFeature ServerEnv{serverBlobStore = store}
 
     candidateRender :: CandPkgInfo -> IO CandidateRender
     candidateRender cand = do
-        users  <- queryGetUserDb
         index  <- queryGetPackageIndex
         let pkg = candPkgInfo cand
         changeLog <- findToplevelFile pkg isChangeLogFile
                  >>= either (\_ -> return Nothing) (return . Just)
         readme    <- findToplevelFile pkg isReadmeFile
                  >>= either (\_ -> return Nothing) (return . Just)
-        let render = doPackageRender users pkg
+        let render = doPackageRender pkg
         return $ CandidateRender {
           candPackageRender = render { rendPkgUri    = rendPkgUri render ++ "/candidate"
                                      , rendChangeLog = changeLog

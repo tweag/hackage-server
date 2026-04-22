@@ -19,7 +19,8 @@ import Distribution.Server.Features.Users
 import Distribution.Server.Features.Upload
 import Distribution.Server.Features.Core
 
-import Distribution.Server.Users.Types
+import Distribution.Server.Users.Types hiding (userName)
+import Distribution.Server.Database.Schemas.Users (UsersRow (userName))
 import Distribution.Server.Util.Validators (guardValidLookingEmail, guardValidLookingName)
 
 import qualified Data.Text as T

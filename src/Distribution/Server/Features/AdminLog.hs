@@ -74,9 +74,9 @@ adminLogFeature UserFeature{..} adminLogState
     queryGetAdminLog = queryState adminLogState Acid.GetAdminLog
 
     serveAdminLogGet _ = do
-      aLog  <- queryState adminLogState Acid.GetAdminLog
-      users <- queryGetUserDb
-      return . toResponse . adminLogPage users . map mkRow . Acid.adminLog $ aLog
+      aLog  <- undefined -- queryState adminLogState Acid.GetAdminLog
+      -- users <- queryGetUserDb
+      return . toResponse . adminLogPage . map mkRow . Acid.adminLog $ aLog
 
     mkRow (time, actorId, Admin_GroupDelUser targetId group, reason) =
           (time, actorId, "Acid.Delete", targetId, nameIt group, unpackUTF8 reason)

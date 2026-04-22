@@ -13,15 +13,11 @@ import Distribution.Server.Framework
 import Distribution.Server.Features.Core
 import Distribution.Server.Features.Users
 
-import Distribution.Server.Users.State
 import Distribution.Server.Packages.Types
-import Distribution.Server.Users.Backup
 import Distribution.Server.Users.Types
-import Distribution.Server.Users.Users hiding (lookupUserName)
 import Distribution.Server.Users.Group (UserGroup(..), GroupDescription(..), nullDescription)
 import qualified Distribution.Server.Framework.BlobStorage as BlobStorage
 import qualified Distribution.Server.Packages.Unpack as Upload
-import Distribution.Server.Framework.BackupDump
 import Distribution.Server.Util.Parse (unpackUTF8)
 
 import Distribution.PackageDescription.Parsec (parseGenericPackageDescription, runParseResult)
@@ -59,37 +55,20 @@ initMirrorFeature :: ServerEnv
                   -> IO (CoreFeature
                       -> UserFeature
                       -> IO MirrorFeature)
-initMirrorFeature env@ServerEnv{serverStateDir} = do
-    -- Canonical state
-    mirrorersState <- mirrorersStateComponent serverStateDir
-
+initMirrorFeature env = do
     return $ \core user@UserFeature{..} -> do
       -- Tie the knot with a do-rec
       rec let (feature, mirrorersGroupDesc)
                 = mirrorFeature env core user
-                                mirrorersState mirrorersG mirrorR
+                                mirrorersG mirrorR
 
           (mirrorersG, mirrorR) <- groupResourceAt "/packages/mirrorers" mirrorersGroupDesc
 
       return feature
 
-mirrorersStateComponent :: FilePath -> IO (StateComponent AcidState MirrorClients)
-mirrorersStateComponent stateDir = do
-  st <- openLocalStateFrom (stateDir </> "db" </> "MirrorClients") initialMirrorClients
-  return StateComponent {
-      stateDesc    = "Mirror clients"
-    , stateHandle  = st
-    , getState     = query st GetMirrorClients
-    , putState     = update st . ReplaceMirrorClients . mirrorClients
-    , backupState  = \_ (MirrorClients clients) -> [csvToBackup ["clients.csv"] $ groupToCSV clients]
-    , restoreState = MirrorClients <$> groupBackup ["clients.csv"]
-    , resetState   = mirrorersStateComponent
-    }
-
 mirrorFeature :: ServerEnv
               -> CoreFeature
               -> UserFeature
-              -> StateComponent AcidState MirrorClients
               -> UserGroup
               -> GroupResource
               -> (MirrorFeature, UserGroup)
@@ -106,7 +85,7 @@ mirrorFeature ServerEnv{serverBlobStore = store}
                          , updateSetPackageUploader
                          }
               UserFeature{..}
-              mirrorersState mirrorGroup mirrorGroupResource
+              mirrorGroup mirrorGroupResource
   = (MirrorFeature{..}, mirrorersGroupDesc)
   where
     mirrorFeatureInterface = (emptyHackageFeature "mirror") {
@@ -121,7 +100,7 @@ mirrorFeature ServerEnv{serverBlobStore = store}
             [ groupResource     mirrorGroupResource
             , groupUserResource mirrorGroupResource
             ]
-      , featureState = [abstractAcidStateComponent mirrorersState]
+      , featureState = []
       }
 
     mirrorResource = MirrorResource {
@@ -152,9 +131,9 @@ mirrorFeature ServerEnv{serverBlobStore = store}
 
     mirrorersGroupDesc = UserGroup {
         groupDesc             = nullDescription { groupTitle = "Mirror clients" },
-        queryUserGroup        = queryState  mirrorersState   GetMirrorClientsList,
-        addUserToGroup        = updateState mirrorersState . AddMirrorClient,
-        removeUserFromGroup   = updateState mirrorersState . RemoveMirrorClient,
+        queryUserGroup        = error "queryState  mirrorersState   GetMirrorClientsList",
+        addUserToGroup        = error "updateState mirrorersState . AddMirrorClient",
+        removeUserFromGroup   = error "updateState mirrorersState . RemoveMirrorClient",
         groupsAllowedToDelete = [adminGroup],
         groupsAllowedToAdd    = [adminGroup]
     }
@@ -199,8 +178,8 @@ mirrorFeature ServerEnv{serverBlobStore = store}
 
     uploaderGet dpath = do
       pkg    <- packageInPath dpath >>= lookupPackageId
-      userdb <- queryGetUserDb
-      return $ toResponse $ display (userIdToName userdb (pkgLatestUploadUser pkg))
+      -- userdb <- queryGetUserDb
+      return $ error "toResponse $ display (userIdToName userdb (pkgLatestUploadUser pkg))"
 
     uploaderPut :: DynamicPath -> ServerPartE Response
     uploaderPut dpath = do

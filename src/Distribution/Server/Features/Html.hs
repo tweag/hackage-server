@@ -1,4 +1,6 @@
 {-# LANGUAGE RecursiveDo, FlexibleContexts, RankNTypes, NamedFieldPuns, RecordWildCards, LambdaCase #-}
+{-# LANGUAGE TypeApplications                                                                       #-}
+
 module Distribution.Server.Features.Html (
     HtmlFeature(..),
     initHtmlFeature
@@ -43,7 +45,6 @@ import Distribution.Server.Users.Types
 import qualified Distribution.Server.Users.Group as Group
 import Distribution.Server.Packages.Types
 import Distribution.Server.Packages.Render
-import qualified Distribution.Server.Users.Users as Users
 import qualified Distribution.Server.Packages.PackageIndex as PackageIndex
 import Distribution.Server.Users.Group (UserGroup(..))
 
@@ -435,7 +436,7 @@ mkHtmlCore :: ServerEnv
            -> HtmlCore
 mkHtmlCore ServerEnv{serverBaseURI, serverBlobStore}
            utilities@HtmlUtilities{..}
-           UserFeature{queryGetUserDb, checkAuthenticated, guardAuthorised_, adminGroup}
+           UserFeature{checkAuthenticated, guardAuthorised_, adminGroup}
            CoreFeature{coreResource}
            VersionsFeature{ versionsResource
                           , queryGetDeprecatedFor
@@ -546,48 +547,48 @@ mkHtmlCore ServerEnv{serverBaseURI, serverBlobStore}
     serveRecentPage :: DynamicPath -> ServerPartE Response
     serveRecentPage _ = do
       recentPackages <- getRecentPackages
-      users <- queryGetUserDb
+      -- users <- queryGetUserDb
       page <-  lookupPage 1
       pageSize <- lookupPageSize 20
 
       let conf = Paging.createConf page pageSize recentPackages
 
-      return . toResponse $ Pages.recentPage conf users recentPackages
+      return . toResponse $ Pages.recentPage conf recentPackages
 
     serveRecentRSS :: DynamicPath -> ServerPartE Response
     serveRecentRSS _ = do
       recentPackages <- getRecentPackages
-      users <- queryGetUserDb
+      -- users <- queryGetUserDb
       page <-  lookupPage 1
       pageSize <- lookupPageSize 20
       now   <- liftIO getCurrentTime
 
       let conf = Paging.createConf page pageSize recentPackages
 
-      return . toResponse $ Pages.recentFeed conf users serverBaseURI now recentPackages
+      return . toResponse $ Pages.recentFeed conf serverBaseURI now recentPackages
 
     serveRevisionPage :: DynamicPath -> ServerPartE Response
     serveRevisionPage _ = do
       revisions <- getRecentRevisions
-      users <- queryGetUserDb
+      -- users <- queryGetUserDb
       page <-  lookupPage 1
       pageSize <- lookupPageSize 40
 
       let conf = Paging.createConf page pageSize revisions
 
-      return . toResponse $ Pages.revisionsPage conf users revisions
+      return . toResponse $ Pages.revisionsPage conf revisions
 
     serveRevisionRSS :: DynamicPath -> ServerPartE Response
     serveRevisionRSS _ = do
       revisions <- getRecentRevisions
-      users <- queryGetUserDb
+      -- users <- queryGetUserDb
       page <-  lookupPage 1
       pageSize <- lookupPageSize 40
       now   <- liftIO getCurrentTime
 
       let conf = Paging.createConf page pageSize revisions
 
-      return . toResponse $ Pages.recentRevisionsFeed conf users serverBaseURI now revisions
+      return . toResponse $ Pages.recentRevisionsFeed conf serverBaseURI now revisions
 
     serveBrowsePage :: DynamicPath -> ServerPartE Response
     serveBrowsePage _dpath = do
@@ -667,7 +668,7 @@ mkHtmlCore ServerEnv{serverBaseURI, serverBlobStore}
         mdocIndex     <- maybe (return Nothing)
           (liftM Just . liftIO . cachedTarIndex) mdoctarblob
         analyticsPixels <- getPackageAnalyticsPixels pkgname
-        userDb          <- queryGetUserDb
+        -- userDb          <- queryGetUserDb
         maintainerlist  <- liftIO $ queryUserGroup maintainers
         let
           idAndReport = fmap (\(rptId, rpt, _) -> (rptId, rpt)) rptStats
@@ -722,7 +723,7 @@ mkHtmlCore ServerEnv{serverBaseURI, serverBlobStore}
           , "candidates"        $= case candidates of
                                     [] -> [ toHtml "No Candidates"]
                                     _  -> [ PagesNew.commaList $ flip map candidates $ \cand -> anchor ! [href $ corePackageIdUri candidatesCore "" $ packageId cand] << display (packageVersion cand) ]
-          , "maintainers"       $= listGroupCompact (map (Users.userIdToName userDb) (Group.toList maintainerlist))
+          , "maintainers"       $= listGroupCompact (map (error "Users.userIdToName userDb") (Group.toList maintainerlist))
           ] ++
           -- Items not related to IO (mostly pure functions)
           PagesNew.packagePageTemplate render
@@ -802,7 +803,7 @@ mkHtmlCore ServerEnv{serverBaseURI, serverBlobStore}
     serveCabalRevisionsPage :: DynamicPath -> ServerPartE Response
     serveCabalRevisionsPage dpath = do
       pkginfo  <- packageInPath dpath >>= lookupPackageId
-      users    <- queryGetUserDb
+      -- users    <- queryGetUserDb
       let pkgid        = packageId pkginfo
           pkgname      = packageName pkginfo
           revisions    = reverse $ Vec.toList (pkgMetadataRevisions pkginfo)
@@ -829,21 +830,21 @@ mkHtmlCore ServerEnv{serverBaseURI, serverBlobStore}
       return $ toResponse $ template
         [ "pkgname"   $= pkgname
         , "pkgid"     $= pkgid
-        , "revisions" $= zipWith3 (revisionToTemplate users)
+        , "revisions" $= zipWith3 (revisionToTemplate)
                                   (map snd revisions)
                                   [numRevisions-1, numRevisions-2..]
                                   revchanges
         ]
       where
-        revisionToTemplate :: Users.Users -> UploadInfo -> Int
+        revisionToTemplate :: UploadInfo -> Int
                            -> (SHA256Digest, [Change])
                            -> TemplateVal
-        revisionToTemplate users (utime, uid) revision (sha256hash, changes) =
-          let uname = Users.userIdToName users uid
+        revisionToTemplate (utime, uid) revision (sha256hash, changes) =
+          let uname = undefined -- Users.userIdToName users uid
            in templateDict
                 [ templateVal "number" revision
                 , templateVal "sha256" (show sha256hash)
-                , templateVal "user" (display uname)
+                , templateVal "user" (display @UserName uname)
                 , utcTimeTemplateVal "htmltime" utime
                 , templateVal "changes" changes
                 ]
@@ -902,7 +903,7 @@ mkHtmlUsers UserFeature{..} UserDetailsFeature{..} = HtmlUsers{..}
 
     serveUserList :: DynamicPath -> ServerPartE Response
     serveUserList _ = do
-        userlist <- Users.enumerateActiveUsers <$> queryGetUserDb
+        userlist <- undefined -- Users.enumerateActiveUsers <$> queryGetUserDb
         let hlist = unordList
                       [ anchor ! [href $ userPageUri users "" uname] << display uname
                       | (_, uinfo) <- userlist, let uname = userName uinfo ]
@@ -1183,7 +1184,7 @@ mkHtmlCandidates ServerEnv{..} utilities@HtmlUtilities{..}
                  DocumentationFeature{documentationResource, queryDocumentation,..}
                  TarIndexCacheFeature{cachedTarIndex}
                  PackageCandidatesFeature{..}
-                 UserFeature{ guardAuthorised, guardAuthorised_, queryGetUserDb }
+                 UserFeature{ guardAuthorised, guardAuthorised_}
                  templates = HtmlCandidates{..}
   where
     candidates     = candidatesResource
@@ -1354,14 +1355,14 @@ mkHtmlCandidates ServerEnv{..} utilities@HtmlUtilities{..}
               warn -> [thediv ! [theclass "candidate-warn"] << [paragraph << strong (toHtml "Warnings:"), unordList warn]]
 
       let maintainers = maintainersGroup pkgname
-      userDb          <- queryGetUserDb
+      -- userDb          <- queryGetUserDb
       maintainerlist  <- liftIO $ queryUserGroup maintainers
 
       return $ toResponse . template $
         [ "versions"          $= (PagesNew.renderVersion (packageId cand) (classifyVersions prefInfo $ insert version otherVersions) Nothing)
         , "maintainHtml"      $= [maintainHtml]
         , "warningBox"        $= warningBox
-        , "maintainers"       $= listGroupCompact (map (Users.userIdToName userDb) (Group.toList maintainerlist))
+        , "maintainers"       $= listGroupCompact (map (undefined "Users.userIdToName userDb") (Group.toList maintainerlist))
         ] ++
         PagesNew.packagePageTemplate render
             mdocIndex mdocMeta mreadme
@@ -2067,23 +2068,23 @@ htmlGroupResource UserFeature{..} r@(GroupResource groupR userR getGroup) =
   where
     getList dpath = do
         group    <- getGroup dpath
-        userDb   <- queryGetUserDb
+        -- userDb   <- queryGetUserDb
         usergroup <- liftIO . queryUserGroup $ group
-        let unames = [ Users.userIdToName userDb uid
+        let unames = [ undefined -- Users.userIdToName userDb uid
                      | uid   <- Group.toList usergroup ]
         let baseUri = renderResource' groupR dpath
-        cacheControl [NoCache] (etagFromHash unames)
+        cacheControl [NoCache] (etagFromHash @[UserName] unames)
         return . toResponse . Resource.XHtml $ Pages.groupPage
             unames baseUri (False, False) (groupDesc group)
     getEditList dpath = do
         group    <- getGroup dpath
         (canAdd, canDelete) <- lookupGroupEditAuth group
-        userDb   <- queryGetUserDb
+        -- userDb   <- queryGetUserDb
         usergroup <- liftIO . queryUserGroup $ group
-        let unames = [ Users.userIdToName userDb uid
+        let unames = [ undefined -- Users.userIdToName userDb uid
                      | uid   <- Group.toList usergroup ]
         let baseUri = renderResource' groupR dpath
-        cacheControl [NoCache] (etagFromHash unames)
+        cacheControl [NoCache] (etagFromHash @[UserName] unames)
         return . toResponse . Resource.XHtml $ Pages.groupPage
             unames baseUri (canAdd, canDelete) (groupDesc group)
     postUser dpath = do

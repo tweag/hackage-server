@@ -7,6 +7,7 @@
 module Distribution.Server.Features.Vouch (VouchFeature(..), initVouchFeature, judgeVouch) where
 
 import Distribution.Server.Database.Schemas.Features (VouchRow(..), vouchesSchema)
+import Distribution.Server.Database.Schemas.Users
 import Distribution.Server.Features.Vouch.Types
 import Control.Monad (when, join)
 import Control.Monad.Except (runExceptT, throwError)
@@ -25,7 +26,7 @@ import Distribution.Server.Framework (liftIO, resourceAt, resourceDesc, resource
 import Distribution.Server.Framework (resourcePost, toResponse)
 import Distribution.Server.Framework.Templating (($=), TemplateAttr, getTemplate, loadTemplates, reloadTemplates, templateUnescaped)
 import qualified Distribution.Server.Users.Group as Group
-import Distribution.Server.Users.Types (UserId(..), UserInfo, UserName(..), userName)
+import Distribution.Server.Users.Types (UserId(..), UserName(..))
 import Distribution.Server.Features.Upload(UploadFeature(..))
 import Distribution.Server.Features.Users (UserFeature(..))
 import Distribution.Simple.Utils (toUTF8LBS)
@@ -75,7 +76,7 @@ judgeVouch ugroup now vouchee vouchersForVoucher existingVouchers voucher = join
          let stillRequired = requiredCountOfVouches - length existingVouchers - 1
           in AddVouchIncomplete stillRequired
 
-renderToLBS :: (UserId -> ServerPartE UserInfo) -> [(UserId, UTCTime)] -> ServerPartE TemplateAttr
+renderToLBS :: (UserId -> ServerPartE User) -> [(UserId, UTCTime)] -> ServerPartE TemplateAttr
 renderToLBS lookupUserInfo vouches = do
   rendered <- traverse (renderVouchers lookupUserInfo) vouches
   pure $
@@ -84,7 +85,7 @@ renderToLBS lookupUserInfo vouches = do
          then LBS.pack "Nobody has endorsed yet."
          else LBS.intercalate mempty rendered
 
-renderVouchers :: (UserId -> ServerPartE UserInfo) -> (UserId, UTCTime) -> ServerPartE LBS.ByteString
+renderVouchers :: (UserId -> ServerPartE User) -> (UserId, UTCTime) -> ServerPartE LBS.ByteString
 renderVouchers lookupUserInfo (uid, timestamp) = do
   info <- lookupUserInfo uid
   let UserName name = userName info
@@ -132,7 +133,7 @@ initVouchFeature ServerEnv{serverConnection = conn, serverTemplatesDir, serverTe
           Left YouAlreadyVouched ->
             errBadRequest "Already endorsed" [MText "You have already endorsed this user."]
           Right result -> do
-            liftIO $ doInsert conn $
+            liftIO $ doInsert_ conn $
               putVouch vouchee voucher now
             param <- renderToLBS lookupUserInfo $ existingVouchers ++ [(voucher, now)]
             case result of

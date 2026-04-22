@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-uni-patterns #-}
 module Distribution.Server.Features.UserNotify (
     UserNotifyFeature(..),
@@ -27,9 +28,8 @@ import Distribution.Package
 import Distribution.Pretty
 import Distribution.Version
 
-import qualified Distribution.Server.Users.Users as Users
 import Distribution.Server.Users.Group
-import Distribution.Server.Users.Types (UserId, UserInfo (..))
+import Distribution.Server.Users.Types (UserId, UserInfo (..), UserName)
 import Distribution.Server.Users.UserIdSet as UserIdSet
 
 import Distribution.Server.Packages.Types
@@ -461,7 +461,7 @@ userNotifyFeature UserFeature{..}
             NewIncompatibility ->
               (("newIncompatibilityChecked" $= ("checked=checked" :: String)) :)
       ok . toResponse . template . addNotifyDependencyForMaintainedChecked . addNotifyDependencyTriggerBoundsChecked $
-        [ "username"                $= display (userName uinfo)
+        [ "username"                $= display @UserName undefined --  (userName uinfo)
         , "showConfirmationOfSave"  $= showConfirmationOfSave
         , "notifyEnabled"           $= toRadioButtons "notifyEnabled=%s"          ui_notifyEnabled
         , "notifyRevisionRange"     $= toRadioButtons "notifyRevisionRange=%s"    ui_notifyRevisionRange
@@ -495,7 +495,6 @@ userNotifyFeature UserFeature{..}
         let trimLastTime = if diffUTCTime now lastNotifyTime > (60*60*6) -- cap at 6hr
                              then addUTCTime (negate $ (60*60*6)) now
                              else lastNotifyTime -- for testing you can increase this
-        users <- queryGetUserDb
 
         revisionsAndUploads <- collectRevisionsAndUploads trimLastTime now
         revisionUploadNotifications <- concatMapM (genRevUploadList notifyPrefs trimLastTime now) revisionsAndUploads
@@ -516,7 +515,7 @@ userNotifyFeature UserFeature{..}
         vouchNotifications <- fmap (, NotifyVouchingCompleted) <$> drainQueuedNotifications
 
         emails <-
-          getNotificationEmails userFeatureServerEnv userDetailsFeature users templates $
+          getNotificationEmails userFeatureServerEnv userDetailsFeature templates $
             concat
               [ revisionUploadNotifications
               , groupActionNotifications
@@ -685,14 +684,12 @@ data NotificationGroup
 getNotificationEmails
   :: ServerEnv
   -> UserDetailsFeature
-  -> Users.Users
   -> Templates
   -> [(UserId, Notification)]
   -> IO [Mail]
 getNotificationEmails
   ServerEnv{serverBaseURI}
   UserDetailsFeature{queryUserDetails}
-  allUsers
   templates
   notifications = do
     let userIds = Set.fromList $ map fst notifications
@@ -748,7 +745,7 @@ getNotificationEmails
               { uriPath =
                   concatMap ("/" <>)
                     [ "user"
-                    , display $ Users.userIdToName allUsers uid
+                    , undefined -- display $ Users.userIdToName allUsers uid
                     , "notify"
                     ]
               }
@@ -873,7 +870,7 @@ getNotificationEmails
           { uriPath = "/package/" <> display (packageName pkg) <> "-" <> display (packageVersion pkg)
           }
 
-    renderUser = emailContentDisplay . Users.userIdToName allUsers
+    renderUser = emailContentDisplay @UserName . undefined -- Users.userIdToName allUsers
 
     renderTime = emailContentStr . formatTime defaultTimeLocale "%c"
 

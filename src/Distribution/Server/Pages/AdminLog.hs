@@ -4,8 +4,6 @@ module Distribution.Server.Pages.AdminLog (
     adminLogPage
   ) where
 
-import qualified Distribution.Server.Users.Users as Users
-import Distribution.Server.Users.Users (Users)
 import Distribution.Server.Users.Types (UserId)
 import Distribution.Server.Pages.Template
          ( hackagePage)
@@ -21,16 +19,16 @@ import Data.Time.Clock
 import Data.Time.Format
          ( defaultTimeLocale, formatTime )
 
-adminLogPage :: Users -> [(UTCTime, UserId, String, UserId, String, String)] -> Html
-adminLogPage users entries = hackagePage "adminstrator actions log" docBody
+adminLogPage :: [(UTCTime, UserId, String, UserId, String, String)] -> Html
+adminLogPage entries = hackagePage "adminstrator actions log" docBody
      where
         docBody = [XHtml.h2 << "Administrator actions",
                    XHtml.table ! [XHtml.align "center"] << (header : map makeRow entries)]
         makeRow (time, actorId, action, targetId, group, reason) = XHtml.tr << map fmtCell
              [showTime time,
-              display $ Users.userIdToName users actorId,
+              undefined, -- display $ Users.userIdToName users actorId,
               action,
-              display $ Users.userIdToName users targetId,
+              undefined, -- display $ Users.userIdToName users targetId,
               group,
               reason]
         nbsp = XHtml.primHtmlChar "nbsp"
