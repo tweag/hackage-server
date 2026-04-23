@@ -27,6 +27,7 @@
 module Distribution.Server.Database.Schemas.Users
   ( -- * Users table
     UsersRow(..)
+  , type User
   , usersSchema
   , usersTable
 
@@ -62,6 +63,7 @@ import Rel8
   , DBEq
   , Name
   , Rel8able
+  , Result
   , TableSchema(..)
   , Column
   , encode
@@ -98,6 +100,8 @@ data UsersRow f = UsersRow
   }
   deriving stock (Generic)
   deriving anyclass (Rel8able)
+
+type User = UsersRow Result
 
 usersSchema :: TableSchema (UsersRow Name)
 usersSchema = TableSchema
