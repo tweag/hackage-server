@@ -1,6 +1,10 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE MonoLocalBinds        #-}
+{-# LANGUAGE DeriveAnyClass             #-}
+{-# LANGUAGE DerivingStrategies         #-}
+{-# LANGUAGE DuplicateRecordFields      #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MonoLocalBinds             #-}
+{-# LANGUAGE TypeApplications           #-}
 
 module Distribution.Server.Framework.DB
     ( module Distribution.Server.Framework.DB
@@ -31,18 +35,20 @@ module Distribution.Server.Framework.DB
     , (>$<)
     , orderBy
     , in_
+    , ViaEnum(..)
     ) where
 
+import Data.Int
 import Data.Traversable
 import Data.Functor
 import Control.Monad.State.Strict
 import Data.Foldable
-import Data.Functor.Contravariant ((>$<))
+import Data.Functor.Contravariant ((>$<), contramap)
 import Distribution.Verbosity (normal)
 import Distribution.Server.Framework.Error (ServerPartE, internalServerErrorResponse, throwError)
 import Distribution.Server.Framework.Logging (lognotice)
 import Control.Monad.IO.Class (liftIO)
-import Rel8 hiding (null, run)
+import Rel8 hiding (null, run, Enum)
 import qualified Rel8 as Rel8
 import           Hasql.Connection (Connection)
 import           Hasql.Session (SessionError, statement, run)
@@ -178,4 +184,16 @@ unsafePartsOf travers ta =
         (a : as) -> do
           put $! as
           pure a
+
+
+newtype ViaEnum a = ViaEnum a
+  deriving newtype (Enum)
+  deriving anyclass (DBEq, DBOrd)
+
+instance Enum a => DBType (ViaEnum a) where
+  typeInformation =
+    let ti = typeInformation @Int64
+    in ti { encode = contramap (fromIntegral . fromEnum) $ encode ti
+          , decode = fmap (toEnum . fromIntegral) $ decode ti
+          }
 

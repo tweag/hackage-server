@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DeriveTraversable     #-}
 {-# LANGUAGE DerivingStrategies    #-}
+{-# LANGUAGE DerivingVia           #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns        #-}
@@ -69,6 +70,7 @@ import Data.Text (Text)
 import Data.Time (UTCTime)
 import GHC.Generics (Generic)
 import Data.Functor.Contravariant (contramap)
+import Distribution.Server.Framework.DB
 
 import Rel8
   ( Name
@@ -190,14 +192,7 @@ data MaintainerRole
   | PackageTrustee
   | PackageUploader
   deriving stock (Show, Eq, Ord, Generic, Enum, Bounded)
-
-
-instance DBType MaintainerRole where
-  typeInformation =
-    let ti = typeInformation @Int64
-    in ti { encode = contramap (fromIntegral . fromEnum) $ encode ti
-          , decode = fmap (toEnum . fromIntegral) $ decode ti
-          }
+  deriving (DBEq, DBType) via ViaEnum MaintainerRole
 
 data PackageMaintainerRow f = PackageMaintainerRow
   { pmId :: Column f Int64

@@ -1,7 +1,9 @@
 {-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving, TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DerivingStrategies                                              #-}
+{-# LANGUAGE DerivingVia                                                     #-}
+{-# LANGUAGE TypeApplications                                                #-}
+{-# LANGUAGE TypeFamilies                                                    #-}
+
 module Distribution.Server.Users.Types (
     module Distribution.Server.Users.Types,
     module Distribution.Server.Users.AuthToken,
@@ -30,20 +32,14 @@ import Data.Hashable
 import Data.Serialize (Serialize)
 import Data.Coerce (coerce)
 import Data.Functor.Contravariant (contramap)
-import Data.Int (Int64)
 import Rel8 (DBType(..), encode, decode, DBEq, DBOrd)
 import Rel8.CreateTable (DBAutoInc)
+import Distribution.Server.Framework.DB (ViaEnum(..))
 
 
 newtype UserId = UserId Int
-  deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Pretty, DBEq, DBOrd, DBAutoInc)
-
-instance DBType UserId where
-  typeInformation =
-    let ti = typeInformation @Int64
-    in ti { encode = contramap (fromIntegral . coerce @UserId @Int) $ encode ti
-          , decode = fmap (UserId . fromIntegral) $ decode ti
-          }
+  deriving newtype (Eq, Ord, Read, Show, Enum, MemSize, ToJSON, FromJSON, Pretty, DBAutoInc)
+  deriving (DBEq, DBOrd, DBType) via ViaEnum UserId
 
 newtype UserName  = UserName String
   deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Hashable, Serialize, DBEq, DBOrd)

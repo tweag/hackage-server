@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DeriveTraversable     #-}
 {-# LANGUAGE DerivingStrategies    #-}
+{-# LANGUAGE DerivingVia           #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns        #-}
@@ -161,6 +162,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (UTCTime, Day)
 import GHC.Generics (Generic)
+import Distribution.Server.Framework.DB
 
 import Rel8
   ( Name
@@ -210,16 +212,9 @@ instance DBType Version where
         Just v  -> v
         Nothing -> error $ "DBType Version decode: " ++ T.unpack t
 
-enumTypeInformation :: Enum a => Rel8.TypeInformation a
-enumTypeInformation =
-  let ti = typeInformation @Int32
-  in ti { encode = contramap (fromIntegral . fromEnum) $ encode ti
-        , decode = fmap (toEnum . fromIntegral) $ decode ti
-        }
-
-instance DBType NotifyRevisionRange where typeInformation = enumTypeInformation
-instance DBType NotifyTriggerBounds where typeInformation = enumTypeInformation
-instance DBType AccountKind         where typeInformation = enumTypeInformation
+deriving via ViaEnum NotifyRevisionRange instance DBType NotifyRevisionRange
+deriving via ViaEnum NotifyTriggerBounds instance DBType NotifyTriggerBounds
+deriving via ViaEnum AccountKind instance DBType AccountKind
 
 -- ============================================================================
 -- Votes Table
