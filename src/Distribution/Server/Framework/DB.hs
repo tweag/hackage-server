@@ -32,8 +32,12 @@ module Distribution.Server.Framework.DB
     , DBOrd
     , DBType(..)
     , TypeInformation(..)
+    , Connection
     , (>$<)
     , orderBy
+    , asc
+    , desc
+    , limit
     , in_
     , ViaEnum(..)
     ) where
@@ -98,6 +102,13 @@ doUpdate
     -> Update (Query exprs)
     -> IO (Either SessionError [FromExprs exprs])
 doUpdate conn = flip run conn . statement () . Rel8.run . update
+
+
+doUpdate_
+    :: Connection
+    -> Update a
+    -> IO (Either SessionError ())
+doUpdate_ conn = flip run conn . statement () . Rel8.run_ . update
 
 doUpdate1
     :: Serializable exprs (FromExprs exprs)

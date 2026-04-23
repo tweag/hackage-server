@@ -1,5 +1,7 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP          #-}
+{-# LANGUAGE BangPatterns          #-}
+{-# LANGUAGE CPP                   #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE TypeApplications      #-}
 
 -- | SHA256 digest
 module Distribution.Server.Features.Security.SHA256 (
@@ -12,12 +14,13 @@ module Distribution.Server.Features.Security.SHA256 (
 -- stdlibs
 import           Distribution.Server.Prelude
 
+import Data.Functor.Contravariant (contramap)
 import           Control.DeepSeq
 import           Data.Aeson                            (ToJSON (toJSON))
 import qualified Data.ByteString                       as BS
 import qualified Data.ByteString.Base16                as B16
 import           Data.SafeCopy
-import           Data.Serialize                        as Ser
+import           Data.Serialize                        as Ser hiding (encode, decode)
 #if MIN_VERSION_binary(0,8,3)
 import           Data.ByteString.Builder.Extra         as BS
 #endif
@@ -33,6 +36,7 @@ import qualified Crypto.Hash.SHA256                    as SHA256
 -- hackage
 import           Distribution.Server.Framework.MemSize
 import           Distribution.Server.Util.ReadDigest
+import Distribution.Server.Framework.DB
 
 -- | SHA256 digest
 data SHA256Digest = SHA256Digest {-# UNPACK #-} !Word64 {-# UNPACK #-} !Word64
@@ -123,3 +127,13 @@ sha256DigestBytes =
 #else
     toBs = BS.Lazy.toStrict . Bin.runPut
 #endif
+
+
+instance DBType SHA256Digest where
+  typeInformation =
+      let ti = typeInformation @BS.ByteString
+       in ti { encode = contramap sha256DigestBytes $ encode ti
+             , decode = fmap sha256digestFromBS $ decode ti
+             }
+
+
