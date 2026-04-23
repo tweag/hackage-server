@@ -38,7 +38,7 @@ import           Distribution.Server.Prelude
 
 import           Distribution.Server.Features.Security.SHA256       (sha256)
 import           Distribution.Server.Features.Users
-import           Distribution.Server.Framework
+import           Distribution.Server.Framework hiding (Query)
 import qualified Distribution.Server.Framework.BlobStorage          as BlobStorage
 import qualified Distribution.Server.Framework.ResponseContentTypes as Resource
 import           Distribution.Server.Packages.Index                 (TarIndexEntry (..))
@@ -53,6 +53,8 @@ import           Distribution.Package
 import           Distribution.Text                                  (display)
 import           Distribution.Version                               (nullVersion)
 import Distribution.Server.Database.Schemas.Users
+import Distribution.Server.Framework.DB
+import Distribution.Server.Database.Schemas.Packages
 
 data UploadInfo = UploadInfo
   { uploadInfoTime :: UTCTime
@@ -73,8 +75,6 @@ data CoreFeature = CoreFeature {
     coreResource :: CoreResource,
 
     -- Queries
-    -- | Retrieves the entire main package index.
-    queryGetPackageIndex :: forall m. MonadIO m => m (PackageIndex PkgInfo),
 
     -- | Retrieve the raw tarball info
     queryGetIndexTarballInfo :: forall m. MonadIO m => m IndexTarballInfo,
@@ -317,7 +317,7 @@ coreFeature :: ServerEnv
             -> ( CoreFeature
                , IO IndexTarballInfo )
 
-coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
+coreFeature ServerEnv{serverBlobStore = store, serverConnection} UserFeature{..}
             cacheIndexTarball
             packageChangeHook
             preIndexUpdateHook
@@ -436,9 +436,6 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
       void $ lookupPackageName pkgname
 
     -- Queries
-    --
-    queryGetPackageIndex :: MonadIO m => m (PackageIndex PkgInfo)
-    queryGetPackageIndex = undefined -- Acid.packageIndex <$> queryState packagesState Acid.GetPackagesState
 
     queryGetIndexTarballInfo :: MonadIO m => m IndexTarballInfo
     queryGetIndexTarballInfo = readAsyncCache cacheIndexTarball
@@ -498,30 +495,65 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedCabalFile oldpkginfo newpkginfo)
 
     updateAddPackageTarball :: MonadIO m => PackageId -> PkgTarball -> UploadInfo -> m Bool
-    updateAddPackageTarball pkgid tarball uploadinfo = logTiming maxBound ("updateAddPackageTarball " ++ display pkgid) $ do
-      mpkginfo <- undefined -- updateState packagesState (Acid.AddPackageTarball pkgid tarball uploadinfo)
-
-      case mpkginfo of
-        Nothing -> return False
-        Just (oldpkginfo, newpkginfo) -> do
-          runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedTarball oldpkginfo newpkginfo)
-          return True
+    updateAddPackageTarball
+        pkgid
+        tarball@PkgTarball{pkgTarballGz, pkgTarballNoGz}
+        uploadinfo =
+      logTiming maxBound ("updateAddPackageTarball " ++ display pkgid) $ do
+        res <- liftIO $ doInsert_ serverConnection $ Insert
+          { into = packageTarballRevisionsSchema
+          , rows = values
+              [ PackageTarballRevisionsRow
+                  { ptrId = unsafeDefault
+                  , ptrPackage = lit $ fromPackageIdentifier pkgid
+                  , ptrTime = lit $ uploadInfoTime uploadinfo
+                  , ptrReviser = lit $ userId $ uploadUser uploadinfo
+                  , ptrTarballBlobNoGz = lit pkgTarballNoGz
+                  , ptrTarballBlobGz = lit $ blobInfoId pkgTarballGz
+                  , ptrTarballLength = lit $ fromIntegral $ blobInfoLength pkgTarballGz
+                  , ptrTarballHash = lit $ blobInfoHashSHA256 pkgTarballGz
+                  }
+              ]
+          , onConflict = Abort
+          , returning = Returning ptrId
+          }
+        case res of
+          Left _ -> pure False
+          Right () -> do
+            runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedTarball undefined undefined)
+            pure True
 
     updateSetPackageUploader pkgid userid = do
-      mpkginfo <- undefined -- updateState packagesState (Acid.SetPackageUploader pkgid userid)
-      case mpkginfo of
-        Nothing -> return False
-        Just (oldpkginfo, newpkginfo) -> do
-          runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedUploader oldpkginfo newpkginfo)
+      res <-
+        liftIO $ doUpdate_ serverConnection $ Update
+          { target = packageMetadataRevisionsSchema
+          , from = getLatestRevision pkgid
+          , set = \_ rev -> rev { pmrReviser = lit userid }
+          , updateWhere = \latest rev ->
+              pmrId latest ==. pmrId rev
+          , returning = NoReturning
+          }
+      case res of
+        Left _ -> pure False
+        Right () -> do
+          runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedUploader undefined undefined)
           return True
 
     updateSetPackageUploadTime pkgid time = do
-      mpkginfo <- undefined -- updateState packagesState (Acid.SetPackageUploadTime pkgid time)
-      case mpkginfo of
-        Nothing -> return False
-        Just (oldpkginfo, newpkginfo) -> do
-          runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedUploadTime oldpkginfo newpkginfo)
-          return True
+      res <-
+        liftIO $ doUpdate_ serverConnection $ Update
+          { target = packageMetadataRevisionsSchema
+          , from = getLatestRevision pkgid
+          , set = \_ rev -> rev { pmrTime = lit time }
+          , updateWhere = \latest rev ->
+              pmrId latest ==. pmrId rev
+          , returning = NoReturning
+          }
+      case res of
+        Left _ -> pure False
+        Right () -> do
+          runHook_ packageChangeHook  (PackageChangeInfo PackageUpdatedUploadTime undefined undefined)
+          pure True
 
     updateArchiveIndexEntry :: MonadIO m => FilePath -> LazyByteString -> UTCTime -> m ()
     updateArchiveIndexEntry entryName entryData entryTime = logTiming maxBound ("updateArchiveIndexEntry " ++ show entryName) $ do
@@ -571,7 +603,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     lookupPackageName :: PackageName -> ServerPartE [PkgInfo]
     lookupPackageName pkgname = do
-      pkgsIndex <- queryGetPackageIndex
+      pkgsIndex <- undefined
       case PackageIndex.lookupPackageName pkgsIndex pkgname of
         []   -> packageError [MText "No such package in package index"]
         pkgs -> return pkgs
@@ -582,7 +614,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
       -- pkgs is sorted by version number and non-empty
       return (last pkgs)
     lookupPackageId pkgid = do
-      pkgsIndex <- queryGetPackageIndex
+      pkgsIndex <- undefined
       case PackageIndex.lookupPackageId pkgsIndex pkgid of
         Just pkg -> return pkg
         _ -> packageError [MText $ "No such package version for " ++ display (packageName pkgid)]
@@ -618,7 +650,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     -- as we don't keep the parsed cabal files in memory)
     servePackageList :: DynamicPath -> ServerPartE Response
     servePackageList _ = do
-      pkgIndex <- queryGetPackageIndex
+      pkgIndex <- undefined
       let pkgNames = PackageIndex.allPackageNames pkgIndex
           list = map display pkgNames
       -- We construct the JSON manually so that we control what it looks like;
@@ -692,6 +724,13 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           rsCode = 401
         , rsHeaders   = mkHeaders [("Content-Type",  "text/html")]
       }
+
+
+getLatestRevision :: PackageIdentifier -> Query (PackageMetadataRevisionsRow Expr)
+getLatestRevision pkgId = limit 1 $ orderBy (pmrTime >$< desc) $ do
+  rev <- each packageMetadataRevisionsSchema
+  where_ $ eqPackageId (pmrPackage rev) pkgId
+  pure rev
 
 packageExists, packageIdExists :: (Package pkg, Package pkg') => PackageIndex pkg -> pkg' -> Bool
 -- | Whether a package exists in the given package index.
