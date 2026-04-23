@@ -5,6 +5,7 @@
 module Distribution.Server.Features.Core (
     CoreFeature(..),
     CoreResource(..),
+    UploadInfo(..),
     initCoreFeature,
 
     -- * Change events
@@ -18,8 +19,6 @@ module Distribution.Server.Features.Core (
     -- * Misc other utils
     packageExists,
     packageIdExists,
-
-    packagesStateComponent,
   ) where
 
 -- stdlib
@@ -37,9 +36,6 @@ import qualified Data.Vector                                        as Vec
 -- hackage
 import           Distribution.Server.Prelude
 
-import           Distribution.Server.Features.Core.Backup
-import qualified Distribution.Server.Features.Core.State            as Acid
-import           Distribution.Server.Features.Security.Migration
 import           Distribution.Server.Features.Security.SHA256       (sha256)
 import           Distribution.Server.Features.Users
 import           Distribution.Server.Framework
@@ -49,16 +45,20 @@ import           Distribution.Server.Packages.Index                 (TarIndexEnt
 import qualified Distribution.Server.Packages.Index                 as Packages.Index
 import           Distribution.Server.Packages.PackageIndex          (PackageIndex)
 import qualified Distribution.Server.Packages.PackageIndex          as PackageIndex
-import           Distribution.Server.Packages.Types
-import           Distribution.Server.Users.Types                    (UserId, UserName,
-                                                                     userName)
-import           Distribution.Server.Users.Users                    (lookupUserId,
-                                                                     userIdToName)
+import           Distribution.Server.Packages.Types hiding (UploadInfo)
+import           Distribution.Server.Users.Types                    (UserId, UserName)
 
 -- Cabal
 import           Distribution.Package
 import           Distribution.Text                                  (display)
 import           Distribution.Version                               (nullVersion)
+import Distribution.Server.Database.Schemas.Users
+
+data UploadInfo = UploadInfo
+  { uploadInfoTime :: UTCTime
+  , uploadUser :: User
+  }
+
 
 -- | The core feature, responsible for the main package index and all access
 -- and modifications of it.
@@ -116,7 +116,7 @@ data CoreFeature = CoreFeature {
     -- If this package was found, runs a `PackageChangeInfo` hook when done and
     -- returns True.
     updateSetPackageUploader :: forall m. MonadIO m => PackageId -> UserId -> m Bool,
-    -- | Acid.Sets the upload time of an existing package version.
+    -- | Sets the upload time of an existing package version.
     --
     -- If this package was found, runs a `PackageChangeInfo` hook when done and
     -- returns True.
@@ -267,10 +267,8 @@ data CoreResource = CoreResource {
 }
 
 initCoreFeature :: ServerEnv -> IO (UserFeature -> IO CoreFeature)
-initCoreFeature env@ServerEnv{serverStateDir, serverCacheDelay,
+initCoreFeature env@ServerEnv{serverCacheDelay,
                               serverVerbosity = verbosity} = do
-    -- Canonical state
-    packagesState <- packagesStateComponent verbosity False serverStateDir
 
     -- Hooks
     packageChangeHook   <- newHook
@@ -278,57 +276,9 @@ initCoreFeature env@ServerEnv{serverStateDir, serverCacheDelay,
     packageDownloadHook <- newHook
 
     return $ \users -> do
-
-      -- One-off complex migration
-      --
-      -- As part of the support for TUF we made two changes to the state:
-      --
-      -- \* We made the index append-only, and added a package update log
-      --   to support this.
-      -- \* We changed the PkgTarball data structure to contain BlobInfo rather
-      --   rather than BlobId; that is, we additionally record the length and
-      --   SHA256 hash for all blobs.
-      --
-      -- Acid.Additionally, we now need `package.json` files for all versions of all
-      -- packages. For new packages we add these when the package is uploaded,
-      -- but for previously uploaded packages we need to add them.
-      --
-      -- Migrating the package tarball info and introducing metadata for
-      -- pre-existing packages requires a full search through the package DB.
-      -- Fortunately, since all these changes were introduced at the same time,
-      -- we can use the check for the existence of the update log to see if we
-      -- need any other kind of migration.
-
-      migrateUpdateLog <- (isLeft . Acid.packageUpdateLog) <$>
-                             queryState packagesState Acid.GetPackagesState
-      when migrateUpdateLog $ do
-        -- Migrate Acid.PackagesState (introduce package update log)
-        logTiming verbosity "migrating package update log" $ do
-          updateState packagesState (Acid.MigrateAddUpdateLog undefined)
-
-        -- Migrate PkgTarball
-        logTiming verbosity "migrating PkgTarball" $
-          migratePkgTarball_v1_to_v2 env packagesState
-
-        -- Create a checkpoint
-        --
-        -- Creating a checkpoint after the migration is important for two
-        -- reasons: one, the migration is expensive and we don't want to  repeat
-        -- it. But there is a second, more important reason. Until we have
-        -- migrated we do not have a package log. This means that if we have a
-        -- DB with no checkpoints at all but some old style (pre introduction of
-        -- the package log) transactions as well as some new style transactions
-        -- (post introduction of the package log), those new transactions will
-        -- not be updating the package log. Since migration does not happen
-        -- until _after_ replaying all those transactions, this means we would
-        -- reconstruct the package log rather than use the package log as it was
-        -- constructed in the first place, and we might potentially lose
-        -- information.
-        createCheckpoint (stateHandle packagesState)
-
       rec let (feature, getIndexTarball)
                 = coreFeature env users
-                              packagesState indexTar
+                              indexTar
                               packageChangeHook
                               preIndexUpdateHook
                               packageDownloadHook
@@ -353,29 +303,13 @@ initCoreFeature env@ServerEnv{serverStateDir, serverCacheDelay,
              PackageChangeAdd _ -> return ()
              _ -> do
                      additionalEntries <- concat <$> runHook preIndexUpdateHook packageChange
-                     forM_ additionalEntries $ updateState packagesState . Acid.AddOtherIndexEntry
+                     forM_ additionalEntries $ undefined -- updateState packagesState . Acid.AddOtherIndexEntry
         prodAsyncCache indexTar "package change"
 
       return feature
 
-packagesStateComponent :: Verbosity -> Bool -> FilePath -> IO (StateComponent AcidState Acid.PackagesState)
-packagesStateComponent verbosity freshDB stateDir = do
-  let stateFile = stateDir </> "db" </> "PackagesState"
-  st <- logTiming verbosity "Loaded PackagesState" $
-          openLocalStateFrom stateFile (Acid.initialPackagesState freshDB)
-  return StateComponent {
-       stateDesc    = "Main package database"
-     , stateHandle  = st
-     , getState     = query st Acid.GetPackagesState
-     , putState     = update st . Acid.ReplacePackagesState
-     , backupState  = \_ -> indexToAllVersions
-     , restoreState = packagesBackup
-     , resetState   = packagesStateComponent verbosity True
-     }
-
 coreFeature :: ServerEnv
             -> UserFeature
-            -> StateComponent AcidState Acid.PackagesState
             -> AsyncCache IndexTarballInfo
             -> Hook PackageChange ()
             -> Hook PackageChange [TarIndexEntry]
@@ -384,7 +318,7 @@ coreFeature :: ServerEnv
                , IO IndexTarballInfo )
 
 coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
-            packagesState cacheIndexTarball
+            cacheIndexTarball
             packageChangeHook
             preIndexUpdateHook
             packageDownloadHook
@@ -407,7 +341,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           , coreAdminDeauth
           , corePackUserDeauth
           ]
-      , featureState    = [abstractAcidStateComponent packagesState]
+      , featureState    = []
       , featureCaches   = [
             CacheComponent {
               cacheDesc       = "main package index tarball",
@@ -504,7 +438,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     -- Queries
     --
     queryGetPackageIndex :: MonadIO m => m (PackageIndex PkgInfo)
-    queryGetPackageIndex = Acid.packageIndex <$> queryState packagesState Acid.GetPackagesState
+    queryGetPackageIndex = undefined -- Acid.packageIndex <$> queryState packagesState Acid.GetPackagesState
 
     queryGetIndexTarballInfo :: MonadIO m => m IndexTarballInfo
     queryGetIndexTarballInfo = readAsyncCache cacheIndexTarball
@@ -518,18 +452,19 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     updateAddPackage :: MonadIO m => PackageId
                      -> CabalFileText -> UploadInfo
                      -> Maybe PkgTarball -> m Bool
-    updateAddPackage pkgid cabalFile uploadinfo@(_, uid) mtarball = logTiming maxBound ("updateAddPackage " ++ display pkgid) $ do
+    updateAddPackage pkgid cabalFile uploadinfo mtarball = logTiming maxBound ("updateAddPackage " ++ display pkgid) $ do
       let Just userInfo = undefined -- lookupUserId uid usersdb
 
-      let pkginfo = Acid.mkPackageInfo pkgid cabalFile uploadinfo mtarball
+      let pkginfo = undefined -- Acid.mkPackageInfo pkgid cabalFile uploadinfo mtarball
       additionalEntries <- concat `liftM` runHook preIndexUpdateHook  (PackageChangeAdd pkginfo)
 
-      successFlag <- updateState packagesState $
-        Acid.AddPackage3
-          pkginfo
-          uploadinfo
-          (userName userInfo)
-          additionalEntries
+      successFlag <- undefined
+        -- updateState packagesState $
+        -- Acid.AddPackage3
+        --   pkginfo
+        --   uploadinfo
+        --   (userName userInfo)
+        --   additionalEntries
 
       loginfo maxBound ("updateState(AddPackage3," ++ display pkgid ++ ") -> " ++ show successFlag)
       if successFlag
@@ -539,7 +474,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     updateDeletePackage :: MonadIO m => PackageId -> m Bool
     updateDeletePackage pkgid = logTiming maxBound ("updateDeletePackage " ++ display pkgid) $ do
-      mpkginfo <- updateState packagesState (Acid.DeletePackage pkgid)
+      mpkginfo <- undefined -- updateState packagesState (Acid.DeletePackage pkgid)
       case mpkginfo of
         Nothing -> return False
         Just pkginfo -> do
@@ -547,14 +482,14 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           return True
 
     updateAddPackageRevision :: MonadIO m => PackageId -> CabalFileText -> UploadInfo -> m ()
-    updateAddPackageRevision pkgid cabalfile uploadinfo@(_, uid) = logTiming maxBound ("updateAddPackageRevision " ++ display pkgid) $ do
+    updateAddPackageRevision pkgid cabalfile uploadinfo = logTiming maxBound ("updateAddPackageRevision " ++ display pkgid) $ do
       let Just userInfo = undefined -- lookupUserId uid usersdb
-      (moldpkginfo, newpkginfo) <- updateState packagesState $
+      (moldpkginfo, newpkginfo) <- undefined {-updateState packagesState $
         Acid.AddPackageRevision2
           pkgid
           cabalfile
           uploadinfo
-          (userName userInfo)
+          (userName userInfo)-}
       loginfo maxBound ("updateState(AddPackageRevision2," ++ display pkgid ++ ") -> " ++ maybe "Nothing" (const "Just _") moldpkginfo)
       case moldpkginfo of
         Nothing ->
@@ -564,7 +499,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     updateAddPackageTarball :: MonadIO m => PackageId -> PkgTarball -> UploadInfo -> m Bool
     updateAddPackageTarball pkgid tarball uploadinfo = logTiming maxBound ("updateAddPackageTarball " ++ display pkgid) $ do
-      mpkginfo <- updateState packagesState (Acid.AddPackageTarball pkgid tarball uploadinfo)
+      mpkginfo <- undefined -- updateState packagesState (Acid.AddPackageTarball pkgid tarball uploadinfo)
 
       case mpkginfo of
         Nothing -> return False
@@ -573,7 +508,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           return True
 
     updateSetPackageUploader pkgid userid = do
-      mpkginfo <- updateState packagesState (Acid.SetPackageUploader pkgid userid)
+      mpkginfo <- undefined -- updateState packagesState (Acid.SetPackageUploader pkgid userid)
       case mpkginfo of
         Nothing -> return False
         Just (oldpkginfo, newpkginfo) -> do
@@ -581,7 +516,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           return True
 
     updateSetPackageUploadTime pkgid time = do
-      mpkginfo <- updateState packagesState (Acid.SetPackageUploadTime pkgid time)
+      mpkginfo <- undefined -- updateState packagesState (Acid.SetPackageUploadTime pkgid time)
       case mpkginfo of
         Nothing -> return False
         Just (oldpkginfo, newpkginfo) -> do
@@ -590,8 +525,8 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     updateArchiveIndexEntry :: MonadIO m => FilePath -> LazyByteString -> UTCTime -> m ()
     updateArchiveIndexEntry entryName entryData entryTime = logTiming maxBound ("updateArchiveIndexEntry " ++ show entryName) $ do
-      updateState packagesState $
-        Acid.AddOtherIndexEntry $ ExtraEntry entryName entryData entryTime
+      -- updateState packagesState $
+      --   Acid.AddOtherIndexEntry $ ExtraEntry entryName entryData entryTime
       runHook_ packageChangeHook (PackageChangeIndexExtra entryName entryData entryTime)
 
     -- Cache updates
@@ -599,7 +534,9 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     getIndexTarball :: IO IndexTarballInfo
     getIndexTarball = do
       time  <- getCurrentTime
-      Acid.PackagesState index (Right updateSeq) <- queryState packagesState Acid.GetPackagesState
+      -- Acid.PackagesState index (Right updateSeq) <- queryState undefined Acid.GetPackagesState
+      let index = undefined
+          updateSeq = []
       let updateLog     = Foldable.toList updateSeq
           legacyTarball = Packages.Index.writeLegacy
                             undefined
