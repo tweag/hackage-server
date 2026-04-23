@@ -20,13 +20,9 @@
 --   - HackageTrustees, HackageUploaders, PackageMaintainers -> package_maintainers
 --
 module Distribution.Server.Database.Schemas.Packages
-  ( -- * Packages table
-    PackageRow(..)
-  , packagesSchema
-  , packagesTable
-
+  (
     -- * Package versions table
-  , PackageVersionRow(..)
+    PackageVersionRow(..)
   , packageVersionsSchema
 
     -- * Package maintainers table (combines maintainers, trustees, uploaders)
@@ -59,7 +55,8 @@ module Distribution.Server.Database.Schemas.Packages
 
 import Distribution.Server.Database.Schemas.Users (usersSchema, UsersRow(userId))
 import Rel8.CreateTable
-import Distribution.Package (PackageName)
+import Distribution.Package (PackageName, PackageIdentifier(..))
+import Distribution.Version (VersionRange)
 import Distribution.Types.Version (Version)
 import Distribution.Server.Users.Types (UserId)
 import Distribution.Server.Framework.BlobStorage (BlobId)
@@ -71,6 +68,7 @@ import Data.Time (UTCTime)
 import GHC.Generics (Generic)
 import Data.Functor.Contravariant (contramap)
 import Distribution.Server.Framework.DB
+import qualified Data.Text as T
 
 import Rel8
   ( Name
@@ -82,37 +80,26 @@ import Rel8
   , decode
   )
 
--- ============================================================================
--- Packages Table
--- ============================================================================
-
--- | Packages metadata table
---
--- Maps to: PackagesState.packageIndex (simplified)
--- Stores basic package information
--- PRIMARY KEY (natural): packageId
-data PackageRow f = PackageRow
-  { packageId :: Column f Int32
-  , packageName :: Column f Text
-  , packageLastUpdated :: Column f UTCTime
+-- | Isomorphic to 'PackageIdentifier', but more amenable to being worked with
+-- in Rel8.
+data PackageId f = PackageId
+  { pkgIdName :: Column f PackageName
+  , pkgIdVersion :: Column f Version
   }
   deriving stock (Generic)
   deriving anyclass (Rel8able)
 
-packagesSchema :: TableSchema (PackageRow Name)
-packagesSchema = TableSchema
-  { name = "packages"
-  , columns = PackageRow
-      { packageId = "package_id"
-      , packageName = "package_name"
-      , packageLastUpdated = "last_updated"
-      }
-  }
+toPackageIdentifier :: PackageId Result -> PackageIdentifier
+toPackageIdentifier (PackageId name version) = PackageIdentifier name version
 
-packagesTable :: DbTable PackageRow
-packagesTable = DbTable packagesSchema
-  [ PK packageId
-  ]
+fromPackageIdentifier :: PackageIdentifier -> PackageId Result
+fromPackageIdentifier (PackageIdentifier name version) = PackageId name version
+
+packageIdNames :: PackageId Name
+packageIdNames = PackageId
+  { pkgIdName = "package_id"
+  , pkgIdVersion = "package_version"
+  }
 
 -- ============================================================================
 -- Package Versions Table
@@ -131,9 +118,7 @@ packagesTable = DbTable packagesSchema
 -- A package can have many versions, so each version is stored as a separate row.
 -- The (package_id, version) pair should be unique to prevent duplicate versions.
 data PackageVersionRow f = PackageVersionRow
-  { pvId :: Column f Int64
-  , pvPackageId :: Column f Int32
-  , pvVersion :: Column f Version
+  { pvPackage :: PackageId f
   , pvUploadedBy :: Column f UserId
   , pvUploadTime :: Column f UTCTime
   , pvTarballBlob :: Column f BlobId
@@ -148,9 +133,7 @@ packageVersionsSchema :: TableSchema (PackageVersionRow Name)
 packageVersionsSchema = TableSchema
   { name = "package_versions"
   , columns = PackageVersionRow
-      { pvId = "package_version_id"
-      , pvPackageId = "package_id"
-      , pvVersion = "version"
+      { pvPackage = packageIdNames
       , pvUploadedBy = "uploaded_by"
       , pvUploadTime = "upload_time"
       , pvTarballBlob = "tarball_blob"
@@ -163,7 +146,7 @@ packageVersionsSchema = TableSchema
 
 packageVersionsTable :: DbTable PackageVersionRow
 packageVersionsTable = DbTable packageVersionsSchema
-  [ PK pvId
+  [ -- PK pvId
   ]
 
 -- ============================================================================
@@ -294,11 +277,19 @@ tagAliasesSchema = TableSchema
 -- PRIMARY KEY (natural): pvPrefPackageName
 data PreferredVersionRow f = PreferredVersionRow
   { pvPrefPackageName :: Column f PackageName
-  , pvPrefVersionRange :: Column f Text      -- serialized VersionRange
+  , pvPrefVersionRange :: Column f VersionRange
   , pvPrefLastUpdated :: Column f UTCTime
   }
   deriving stock (Generic)
   deriving anyclass (Rel8able)
+
+instance DBType VersionRange where
+  typeInformation =
+      let ti = typeInformation @Text
+       in ti { encode = contramap (T.pack . show) $ encode ti
+             , decode = fmap (read . T.unpack) $ decode ti
+             }
+
 
 preferredVersionsSchema :: TableSchema (PreferredVersionRow Name)
 preferredVersionsSchema = TableSchema
@@ -321,9 +312,7 @@ preferredVersionsSchema = TableSchema
 -- A package can have many deprecated versions, so each deprecated version
 -- is a separate row. The (package_name, version) pair should be unique.
 data DeprecatedVersionRow f = DeprecatedVersionRow
-  { depId :: Column f Int64
-  , depPackageName :: Column f PackageName
-  , depVersion :: Column f Version
+  { depPkgId :: PackageId f
   }
   deriving stock (Generic)
   deriving anyclass (Rel8able)
@@ -332,9 +321,7 @@ deprecatedVersionsSchema :: TableSchema (DeprecatedVersionRow Name)
 deprecatedVersionsSchema = TableSchema
   { name = "deprecated_versions"
   , columns = DeprecatedVersionRow
-      { depId = "deprecated_version_id"
-      , depPackageName = "package_name"
-      , depVersion = "version"
+      { depPkgId = packageIdNames
       }
   }
 
@@ -350,8 +337,7 @@ deprecatedVersionsSchema = TableSchema
 -- Each package can have one documentation entry. The package_id should
 -- be unique to ensure each package has exactly one documentation record.
 data DocumentationRow f = DocumentationRow
-  { docId :: Column f Int64
-  , docPackageId :: Column f Int32
+  { docPkgId :: PackageId f
   , docBlobId :: Column f BlobId
   , docStoredTime :: Column f UTCTime
   }
@@ -362,8 +348,7 @@ documentationSchema :: TableSchema (DocumentationRow Name)
 documentationSchema = TableSchema
   { name = "documentation"
   , columns = DocumentationRow
-      { docId = "documentation_id"
-      , docPackageId = "package_id"
+      { docPkgId = packageIdNames
       , docBlobId = "blob_id"
       , docStoredTime = "stored_time"
       }
