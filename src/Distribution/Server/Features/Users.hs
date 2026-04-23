@@ -11,6 +11,7 @@ module Distribution.Server.Features.Users (
     GroupResource(..),
   ) where
 
+import Data.Bool (bool)
 import Distribution.Server.Features.UserDetails.Types (AccountKind(..))
 import Distribution.Server.Users.AuthToken (parseAuthToken, viewOriginalToken, convertToken, generateOriginalToken)
 import Distribution.Server.Framework
@@ -396,16 +397,15 @@ userFeature templates
       res <- liftIO $ doUpdate1 serverConnection $ Update
         { target = usersSchema
         , from = pure ()
-        , set = \_ user -> user { userEnabled = lit isenabled }
-        , updateWhere = \_ user -> userId user ==. lit uid
+        , set = \_ user -> user { userStatus = lit $ bool Disabled Enabled isenabled }
+        , updateWhere = \_ user -> userId user ==. lit uid &&. userStatus user /=. lit Deleted
         , returning =
-            -- TODO(sandy): return if deleted!!
-            Returning userEnabled
+            Returning userStatus
         }
       pure $ case res of
         Left _err -> Just $ Left ErrNoSuchUserId
-        Right False -> Nothing
-        Right True -> Just $ Right ErrDeletedUser
+        Right Deleted -> Just $ Right ErrDeletedUser
+        Right _ -> Nothing
 
     updateSetUserAuth :: MonadIO m => UserId -> UserAuth
                       -> m (Maybe (Either ErrNoSuchUserId ErrDeletedUser))
@@ -416,13 +416,12 @@ userFeature templates
         , set = \_ user -> user { userAuth = lit auth }
         , updateWhere = \_ user -> userId user ==. lit uid
         , returning =
-            -- TODO(sandy): return if deleted!!
-            Returning userEnabled
+            Returning userStatus
         }
       pure $ case res of
         Left _err -> Just $ Left ErrNoSuchUserId
-        Right False -> Nothing
-        Right True -> Just $ Right ErrDeletedUser
+        Right Deleted -> Just $ Right ErrDeletedUser
+        Right _ -> Nothing
 
     --
     -- Authorisation: authentication checks and privilege checks
@@ -542,8 +541,7 @@ userFeature templates
     serveUsersGet :: DynamicPath -> ServerPartE Response
     serveUsersGet _ = do
       userlist <- doSelectE serverConnection $ do
-        user <- each usersSchema
-        where_ $ userEnabled user
+        user <- activeUsers
         pure (userId user, userName user)
       let users = [ UserNameIdResource {
                       ui_username = uname,
@@ -597,7 +595,7 @@ userFeature templates
     serveUserEnabledGet dpath = do
       guardAuthorised_ [InGroup adminGroup]
       (_uid, uinfo) <- lookupUserNameFull =<< userNameInPath dpath
-      let enabled = userEnabled uinfo
+      let enabled = userStatus uinfo == Enabled
       return . toResponse $ toJSON EnabledResource { ui_enabled = enabled }
 
     serveUserEnabledPut :: DynamicPath -> ServerPartE Response
@@ -717,7 +715,7 @@ userFeature templates
     lookupUserNameFull :: UserName -> ServerPartE (UserId, (UsersRow Result))
     lookupUserNameFull uname = do
       users <- doSelectE serverConnection $ do
-        user <- each usersSchema
+        user <- activeUsers
         where_ $ userName user ==. lit uname
         pure user
       case listToMaybe users of
@@ -731,7 +729,7 @@ userFeature templates
     lookupUserInfo :: UserId -> ServerPartE (UsersRow Result)
     lookupUserInfo uid =
       doSelect1E serverConnection $ do
-        user <- each usersSchema
+        user <- activeUsers
         where_ $ userId user ==. lit uid
         pure user
 
@@ -844,7 +842,7 @@ userFeature templates
                   addError $ "No user with name " ++ show ustr ++ " found"
                 Just uname -> do
                   res <- doSelectE serverConnection $ do
-                    user <- each usersSchema
+                    user <- activeUsers
                     where_ $ userName user ==. lit uname
                     pure $ userId user
                   case listToMaybe res of
@@ -965,7 +963,7 @@ userFeature templates
       group    <- getGroup groupr dpath
       userlist <- liftIO $ queryUserGroup group
       usernames <- doSelectE serverConnection $ do
-        user <- each usersSchema
+        user <- activeUsers
         where_ $ userId user `in_` fmap lit (Group.toList userlist)
         pure (userId user, userName user)
       return . toResponse $ toJSON
@@ -1059,7 +1057,7 @@ registerUser conn uname passwd enabled = do
         , userEmail = lit Nothing
         , userRealName = lit Nothing
         , userAuth = lit passwd
-        , userEnabled = lit enabled
+        , userStatus =  lit $ bool Disabled Enabled enabled
         , userAccountKind = lit $ Just AccountKindRealUser
         , userAdminNotes = lit ""
         , userCreatedTime = lit now

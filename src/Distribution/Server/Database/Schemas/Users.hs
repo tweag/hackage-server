@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DeriveTraversable     #-}
 {-# LANGUAGE DerivingStrategies    #-}
+{-# LANGUAGE DerivingVia           #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns        #-}
@@ -30,6 +31,8 @@ module Distribution.Server.Database.Schemas.Users
   , type User
   , usersSchema
   , usersTable
+  , UserStatus (..)
+  , activeUsers
 
     -- * User roles junction table
   , UserRoleRow(..)
@@ -49,6 +52,7 @@ import Distribution.Server.Users.Types (UserId, UserName)
 import Distribution.Server.Features.UserDetails.Types (AccountKind)
 import Distribution.Server.Framework.AuthTypes (PasswdHash)
 import Distribution.Server.Users.AuthToken (AuthToken)
+import Distribution.Server.Framework.DB
 
 import Distribution.Server.Database.Schemas.Features ()
 
@@ -57,19 +61,17 @@ import Data.Text (Text)
 import Data.Time (UTCTime)
 import GHC.Generics (Generic)
 
-import Data.Functor.Contravariant (contramap)
 import Rel8
-  ( DBType(..)
-  , DBEq
-  , Name
-  , Rel8able
+  ( Rel8able
   , Result
   , TableSchema(..)
   , Column
-  , encode
-  , decode
   )
 import Rel8.CreateTable
+
+data UserStatus = Enabled | Disabled | Deleted
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+  deriving (DBEq, DBType) via ViaEnum UserStatus
 
 -- ============================================================================
 -- Users Table
@@ -83,7 +85,7 @@ import Rel8.CreateTable
 --   - userName: UserName (from acid-state Users)
 --   - userEmail, userRealName: stored separately in acid-state, now normalized
 --   - userAuth: PasswdHash (from Users.User record via UserAuth wrapper)
---   - userEnabled: whether user account is active
+--   - userStatus: whether user account is active, disabled, or deleted
 --   - userCreatedTime: when the account was created
 -- PRIMARY KEY (natural): userId
 data UsersRow f = UsersRow
@@ -92,8 +94,7 @@ data UsersRow f = UsersRow
   , userEmail :: Column f (Maybe Text)
   , userRealName :: Column f (Maybe Text)
   , userAuth :: Column f PasswdHash
-  , userEnabled :: Column f Bool
-  -- TODO(sandy): Do we need a tombstoned field for "accountdeleted"?
+  , userStatus :: Column f UserStatus
   , userAccountKind :: Column f (Maybe AccountKind)
   , userAdminNotes :: Column f Text
   , userCreatedTime :: Column f UTCTime
@@ -112,12 +113,18 @@ usersSchema = TableSchema
       , userEmail = "user_email"
       , userRealName = "user_real_name"
       , userAuth = "user_auth"
-      , userEnabled = "user_enabled"
+      , userStatus = "user_status"
       , userAccountKind = "user_account_kind"
       , userAdminNotes = "user_admin_notes"
       , userCreatedTime = "user_created_time"
       }
   }
+
+activeUsers :: Query (UsersRow Expr)
+activeUsers = do
+  user <- each usersSchema
+  where_ $ userStatus user ==. lit Enabled
+  pure user
 
 usersTable :: DbTable UsersRow
 usersTable = DbTable usersSchema
@@ -153,14 +160,7 @@ data UserRole
   | Uploader
   | MirrorClient
   deriving stock (Show, Eq, Ord, Enum, Bounded, Generic)
-  deriving anyclass (DBEq)
-
-instance DBType UserRole where
-  typeInformation =
-    let ti = typeInformation @Int64
-    in ti { encode = contramap (fromIntegral . fromEnum) $ encode ti
-          , decode = fmap (toEnum . fromIntegral) $ decode ti
-          }
+  deriving (DBType, DBEq) via ViaEnum UserRole
 
 data UserRoleRow f = UserRoleRow
   { userRoleId :: Column f Int64

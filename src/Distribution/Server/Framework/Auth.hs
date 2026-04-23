@@ -263,14 +263,6 @@ plainHttp req
                     Parse.<++ Parse.satisfy (/='"'))
 
 
--- | A query of all the users who are enabled.
-enabledUsers :: Query (UsersRow Expr)
-enabledUsers = do
-  user <- each usersSchema
-  where_ $ userEnabled user
-  pure user
-
-
 ------------------------------------------------------------------------
 -- Auth token method
 --
@@ -287,7 +279,7 @@ checkTokenAuth conn ahdr = runExceptT $ do
       liftIO $ doSelect1 conn $ do
         token <- each userAuthTokensSchema
         where_ $ authTokenToken token ==. lit parsedToken
-        user <- enabledUsers
+        user <- activeUsers
         where_ $ authTokenUserId token ==. userId user
         pure $ userId user
     case mres of
@@ -306,7 +298,7 @@ checkBasicAuth conn realm ahdr = runExceptT $ do
     authInfo     <- except $ getBasicAuthInfo realm ahdr       ?! UnrecognizedAuthError
     let uname    = basicUsername authInfo
     mres <- liftIO $ doSelect1 conn $ do
-      user <- enabledUsers
+      user <- activeUsers
       where_ $ userName user ==. lit uname
       where_ $ userAuth user ==. lit (basicAuthInfoToHash authInfo)
       pure $ userId user
@@ -370,7 +362,7 @@ checkDigestAuth conn ahdr req = runExceptT $ do
     authInfo     <- except $ getDigestAuthInfo ahdr req ?! UnrecognizedAuthError
     let uname    = digestUsername authInfo
     mres <- liftIO $ doSelect1 conn $ do
-      user <- enabledUsers
+      user <- activeUsers
       where_ $ userName user ==. lit uname
       pure (userId user, userAuth user)
     case mres of
