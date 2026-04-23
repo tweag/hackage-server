@@ -50,7 +50,7 @@ import qualified Distribution.Server.Packages.Index                 as Packages.
 import           Distribution.Server.Packages.PackageIndex          (PackageIndex)
 import qualified Distribution.Server.Packages.PackageIndex          as PackageIndex
 import           Distribution.Server.Packages.Types
-import           Distribution.Server.Users.Types                    (UserId,
+import           Distribution.Server.Users.Types                    (UserId, UserName,
                                                                      userName)
 import           Distribution.Server.Users.Users                    (lookupUserId,
                                                                      userIdToName)
@@ -304,8 +304,7 @@ initCoreFeature env@ServerEnv{serverStateDir, serverCacheDelay,
       when migrateUpdateLog $ do
         -- Migrate Acid.PackagesState (introduce package update log)
         logTiming verbosity "migrating package update log" $ do
-          userdb <- queryGetUserDb users
-          updateState packagesState (Acid.MigrateAddUpdateLog userdb)
+          updateState packagesState (Acid.MigrateAddUpdateLog undefined)
 
         -- Migrate PkgTarball
         logTiming verbosity "migrating PkgTarball" $
@@ -520,8 +519,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
                      -> CabalFileText -> UploadInfo
                      -> Maybe PkgTarball -> m Bool
     updateAddPackage pkgid cabalFile uploadinfo@(_, uid) mtarball = logTiming maxBound ("updateAddPackage " ++ display pkgid) $ do
-      usersdb <- queryGetUserDb
-      let Just userInfo = lookupUserId uid usersdb
+      let Just userInfo = undefined -- lookupUserId uid usersdb
 
       let pkginfo = Acid.mkPackageInfo pkgid cabalFile uploadinfo mtarball
       additionalEntries <- concat `liftM` runHook preIndexUpdateHook  (PackageChangeAdd pkginfo)
@@ -550,8 +548,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     updateAddPackageRevision :: MonadIO m => PackageId -> CabalFileText -> UploadInfo -> m ()
     updateAddPackageRevision pkgid cabalfile uploadinfo@(_, uid) = logTiming maxBound ("updateAddPackageRevision " ++ display pkgid) $ do
-      usersdb <- queryGetUserDb
-      let Just userInfo = lookupUserId uid usersdb
+      let Just userInfo = undefined -- lookupUserId uid usersdb
       (moldpkginfo, newpkginfo) <- updateState packagesState $
         Acid.AddPackageRevision2
           pkgid
@@ -601,12 +598,11 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     --
     getIndexTarball :: IO IndexTarballInfo
     getIndexTarball = do
-      users <- queryGetUserDb  -- note, changes here don't automatically propagate
       time  <- getCurrentTime
       Acid.PackagesState index (Right updateSeq) <- queryState packagesState Acid.GetPackagesState
       let updateLog     = Foldable.toList updateSeq
           legacyTarball = Packages.Index.writeLegacy
-                            users
+                            undefined
                             (Packages.Index.legacyExtras updateLog)
                             index
           incremTarball = Packages.Index.writeIncremental
@@ -727,10 +723,10 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     serveCabalFileRevisionsList :: DynamicPath -> ServerPartE Response
     serveCabalFileRevisionsList dpath = do
       pkginfo <- packageInPath dpath >>= lookupPackageId
-      users   <- queryGetUserDb
+      -- users   <- queryGetUserDb
       let revisions = pkgMetadataRevisions pkginfo
           revisionToObj rev (cabalFileText, (utime, uid)) =
-            let uname = userIdToName users uid
+            let uname = (undefined :: UserName) -- userIdToName users uid
                 hash = sha256 (fromStrict $ cabalFileByteString cabalFileText)
             in
             Object $ KeyMap.fromList
