@@ -11,6 +11,7 @@ module Distribution.Server.Features.Users (
     GroupResource(..),
   ) where
 
+import Data.Functor.Identity (Identity(..))
 import Data.Bool (bool)
 import Distribution.Server.Features.UserDetails.Types (AccountKind(..))
 import Distribution.Server.Users.AuthToken (parseAuthToken, viewOriginalToken, convertToken, generateOriginalToken)
@@ -66,16 +67,16 @@ data UserFeature = UserFeature {
 
     -- Authorisation
     -- | Require any of a set of groups, with a friendly error message
-    guardAuthorisedWhenInAnyGroup :: [Group.UserGroup] -> ServerPartE UserId,
+    guardAuthorisedWhenInAnyGroup :: [Group.UserGroup] -> ServerPartE User,
     -- | Require any of a set of privileges.
     guardAuthorised_   :: [PrivilegeCondition] -> ServerPartE (),
     -- | Require any of a set of privileges, giving the id of the current user.
-    guardAuthorised    :: [PrivilegeCondition] -> ServerPartE UserId,
+    guardAuthorised    :: [PrivilegeCondition] -> ServerPartE User,
     guardAuthorised'    :: [PrivilegeCondition] -> ServerPartE Bool,
     -- | Require being logged in, giving the id of the current user.
-    guardAuthenticated :: ServerPartE UserId,
+    guardAuthenticated :: ServerPartE User,
     -- Gets the authentication if it exists.
-    checkAuthenticated :: ServerPartE (Maybe UserId),
+    checkAuthenticated :: ServerPartE (Maybe User),
     -- | A hook to override the default authentication error in particular
     -- circumstances.
     authFailHook       :: Hook Auth.AuthError (Maybe ErrorResponse),
@@ -427,13 +428,13 @@ userFeature templates
     -- Authorisation: authentication checks and privilege checks
     --
 
-    guardAuthorisedWhenInAnyGroup :: [Group.UserGroup] -> ServerPartE UserId
+    guardAuthorisedWhenInAnyGroup :: [Group.UserGroup] -> ServerPartE User
     guardAuthorisedWhenInAnyGroup [] =
         fail "Group list is empty, this is not meant to happen"
     guardAuthorisedWhenInAnyGroup groups = do
-        uid   <- guardAuthenticatedWithErrHook
-        Auth.guardInAnyGroup uid groups
-        return uid
+        user   <- guardAuthenticatedWithErrHook
+        Auth.guardInAnyGroup (userId user) groups
+        return user
 
     -- High level, all in one check that the client is authenticated as a
     -- particular user and has an appropriate privilege, but then ignore the
@@ -442,22 +443,22 @@ userFeature templates
     guardAuthorised_ = void . guardAuthorised
 
     -- As above but also return the identity of the client
-    guardAuthorised :: [PrivilegeCondition] -> ServerPartE UserId
+    guardAuthorised :: [PrivilegeCondition] -> ServerPartE User
     guardAuthorised privconds = do
-        uid   <- guardAuthenticatedWithErrHook
-        Auth.guardPriviledged uid privconds
-        return uid
+        user   <- guardAuthenticatedWithErrHook
+        Auth.guardPriviledged (userId user) privconds
+        return user
 
     guardAuthorised' :: [PrivilegeCondition] -> ServerPartE Bool
     guardAuthorised' privconds = do
-        uid   <- guardAuthenticatedWithErrHook
-        valid <- Auth.checkPriviledged uid privconds
+        user   <- guardAuthenticatedWithErrHook
+        valid <- Auth.checkPriviledged (userId user) privconds
         return valid
 
     -- Simply check if the user is authenticated as some user, without any
     -- check that they have any particular privileges. Only useful as a
     -- building block.
-    guardAuthenticated :: ServerPartE UserId
+    guardAuthenticated :: ServerPartE User
     guardAuthenticated = do
         guardAuthenticatedWithErrHook
 
@@ -494,13 +495,13 @@ userFeature templates
 
     -- As above but using the given userdb snapshot
     -- See note about "authn" cookie above
-    guardAuthenticatedWithErrHook :: ServerPartE UserId
+    guardAuthenticatedWithErrHook :: ServerPartE User
     guardAuthenticatedWithErrHook = do
         uid <- Auth.checkAuthenticated realm userFeatureServerEnv
                    >>= either handleAuthError return
         addCookie Session (mkCookie "authn" "1")
         -- Set-Cookie:authn="1";Path=/;Version="1"
-        return uid
+        fmap runIdentity $ queryLookupUser $ Identity uid
       where
         realm = Auth.hackageRealm --TODO: should be configurable
 
@@ -519,14 +520,16 @@ userFeature templates
 
     -- Check if there is an authenticated userid, and return info, if so.
     -- See note about "authn" cookie above
-    checkAuthenticated :: ServerPartE (Maybe UserId)
+    checkAuthenticated :: ServerPartE (Maybe User)
     checkAuthenticated = do
         authn <- optional (lookCookieValue "authn")
         case authn of
           Just "1" -> void guardAuthenticated
           _        -> pure ()
-
-        either (const Nothing) Just `fmap` Auth.checkAuthenticated Auth.hackageRealm userFeatureServerEnv
+        eAuth <- Auth.checkAuthenticated Auth.hackageRealm userFeatureServerEnv
+        case eAuth of
+          Left _ -> pure Nothing
+          Right uid -> queryLookupUser $ Just uid
 
     -- | Resources representing the collection of known users.
     --
@@ -613,7 +616,8 @@ userFeature templates
 
     redirectUserManagement :: UserResource -> ServerPartE Response
     redirectUserManagement r = do
-      uid <- guardAuthenticated
+      user <- guardAuthenticated
+      let uid = userId user
       uinfo <- lookupUserInfo uid
       tempRedirect (manageUserUri r "" (userName uinfo)) (toResponse ())
 
@@ -831,7 +835,8 @@ userFeature templates
 
     groupAddUser :: UserGroup -> DynamicPath -> ServerPartE ()
     groupAddUser group _ = do
-        actorUid <- guardAuthorised (map InGroup (groupsAllowedToAdd group))
+        actor <- guardAuthorised (map InGroup (groupsAllowedToAdd group))
+        let actorUid = userId actor
         muser <- optional $ look "user"
         reason <- optional $ look "reason"
         case muser of
@@ -854,7 +859,8 @@ userFeature templates
 
     groupDeleteUser :: UserGroup -> DynamicPath -> ServerPartE ()
     groupDeleteUser group dpath = do
-      actorUid <- guardAuthorised (map InGroup (groupsAllowedToDelete group))
+      actor <- guardAuthorised (map InGroup (groupsAllowedToDelete group))
+      let actorUid = userId actor
       uid <- lookupUserName =<< userNameInPath dpath
       reason <- localRq (\req -> req {rqMethod = POST}) . optional $ look "reason"
       liftIO $ removeUserFromGroup group uid
@@ -864,7 +870,8 @@ userFeature templates
     lookupGroupEditAuth group = do
       addList    <- liftIO . Group.queryUserGroups $ groupsAllowedToAdd group
       removeList <- liftIO . Group.queryUserGroups $ groupsAllowedToDelete group
-      uid <- guardAuthenticated
+      user <- guardAuthenticated
+      let uid = userId user
       let (canAdd, canDelete) = (uid `Group.member` addList, uid `Group.member` removeList)
       if not (canAdd || canDelete)
           then errForbidden "Forbidden" [MText "Can't edit permissions for user group"]
@@ -981,7 +988,8 @@ userFeature templates
     --      and then remove groupAddUser & groupDeleteUser
     serveUserGroupUserPut groupr dpath = do
       group <- getGroup groupr dpath
-      actorUid <- guardAuthorised (map InGroup (groupsAllowedToAdd group))
+      actor <- guardAuthorised (map InGroup (groupsAllowedToAdd group))
+      let actorUid = userId actor
       uid <- lookupUserName =<< userNameInPath dpath
       reason <- optional $ look "reason"
       liftIO $ addUserToGroup group uid
@@ -990,7 +998,8 @@ userFeature templates
 
     serveUserGroupUserDelete groupr dpath = do
       group <- getGroup groupr dpath
-      actorUid <- guardAuthorised (map InGroup (groupsAllowedToDelete group))
+      actor <- guardAuthorised (map InGroup (groupsAllowedToDelete group))
+      let actorUid = userId actor
       uid <- lookupUserName =<< userNameInPath dpath
       reason <- optional $ look "reason"
       liftIO $ removeUserFromGroup group uid
