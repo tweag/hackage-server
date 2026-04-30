@@ -30,6 +30,7 @@ module Distribution.Server.Database.Schemas.Packages
   , metadataRevisionsSchema
 
   , TarballRevisionRow(..)
+  , tarballRevisionsSchema
 
     -- * Package versions table
   , PackageVersionRow(..)
@@ -57,10 +58,16 @@ module Distribution.Server.Database.Schemas.Packages
 
     -- * Package maintenance role type
   , MaintainerRole(..)
+
+  , -- * Common queries
+    pkgLatestTarball
+  , pkgLatestRevision
+  , pkgSpecificRevision
+  , pkgMetadataRevisions
   ) where
 
 import Distribution.Server.Features.Security.SHA256
-import Distribution.Server.Packages.Types
+import Distribution.Server.Packages.Types (MetadataRevIx(..), TarballRevIx(..))
 import Distribution.Package (PackageName)
 import Distribution.Types.Version (Version)
 import Distribution.Server.Users.Types (UserId(..))
@@ -149,8 +156,8 @@ data TarballRevisionRow f = TarballRevisionRow
   deriving anyclass (Rel8able)
 
 
-packageTarballRevisionsSchema :: TableSchema (TarballRevisionRow Name)
-packageTarballRevisionsSchema = TableSchema
+tarballRevisionsSchema :: TableSchema (TarballRevisionRow Name)
+tarballRevisionsSchema = TableSchema
   { name = "package_tarball_revisions"
   , columns = TarballRevisionRow
       { tarballPkgId = "pkgid"
@@ -389,3 +396,42 @@ documentationSchema = TableSchema
       , docStoredTime = "stored_time"
       }
   }
+
+
+--------------------------------------------------------------------------------
+
+
+-- | The latest tarball for a package (if any)
+--
+-- For packages with a @.cabal@ file but no tarball we return 'Nothing'.
+-- For other package we return the latest tarball, corresponding upload info
+-- and revision number. The revision number will normally be 1, but may be
+-- higher if more tarballs were uploaded for this package (on the central
+-- Hackage server we disallow this).
+pkgLatestTarball :: Expr PkgInfoId -> Query (TarballRevisionRow Expr)
+pkgLatestTarball pkginfo = limit 1 $
+  orderBy (tarballRevId >$< desc) $ do
+    rev <- each tarballRevisionsSchema
+    where_ $ tarballPkgId rev ==. pkginfo
+    pure rev
+
+
+pkgLatestRevision :: Expr PkgInfoId -> Query (MetadataRevisionRow Expr)
+pkgLatestRevision
+  = limit 1
+  . orderBy (metadataRevId >$< desc)
+  . pkgMetadataRevisions
+
+
+pkgSpecificRevision :: Expr PkgInfoId -> Expr MetadataRevIx -> Query (MetadataRevisionRow Expr)
+pkgSpecificRevision pkg revid = do
+  rev <- pkgMetadataRevisions pkg
+  where_ $ metadataRevId rev ==. revid
+  pure rev
+
+pkgMetadataRevisions :: Expr PkgInfoId -> Query (MetadataRevisionRow Expr)
+pkgMetadataRevisions pkg = do
+  rev <- each metadataRevisionsSchema
+  where_ $ metadataPkgId rev ==. pkg
+  pure rev
+
