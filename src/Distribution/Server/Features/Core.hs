@@ -2,6 +2,7 @@
 {-# LANGUAGE RankNTypes      #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE RecursiveDo     #-}
+
 module Distribution.Server.Features.Core (
     CoreFeature(..),
     CoreResource(..),
@@ -33,6 +34,13 @@ import qualified Data.Text                                          as Text
 import           Data.Time.Clock                                    (UTCTime, getCurrentTime)
 import           Data.Time.Format                                   (defaultTimeLocale, formatTime)
 import qualified Data.Vector                                        as Vec
+import Data.Functor ((<&>))
+
+import Distribution.Server.Database.Schemas.Users
+import Distribution.Server.Database.Schemas.Packages hiding (packageName, packageId)
+import qualified Distribution.Server.Database.Schemas.Packages as Pkg
+
+import Data.Text.Encoding (encodeUtf8)
 
 -- hackage
 import           Distribution.Server.Prelude
@@ -42,18 +50,18 @@ import qualified Distribution.Server.Features.Core.State            as Acid
 import           Distribution.Server.Features.Security.Migration
 import           Distribution.Server.Features.Security.SHA256       (sha256)
 import           Distribution.Server.Features.Users
-import           Distribution.Server.Framework
+import           Distribution.Server.Framework hiding (Query)
+import           Distribution.Server.Framework.DB
 import qualified Distribution.Server.Framework.BlobStorage          as BlobStorage
 import qualified Distribution.Server.Framework.ResponseContentTypes as Resource
 import           Distribution.Server.Packages.Index                 (TarIndexEntry (..))
 import qualified Distribution.Server.Packages.Index                 as Packages.Index
 import           Distribution.Server.Packages.PackageIndex          (PackageIndex)
 import qualified Distribution.Server.Packages.PackageIndex          as PackageIndex
-import           Distribution.Server.Packages.Types
-import           Distribution.Server.Users.Types                    (UserId,
-                                                                     userName)
-import           Distribution.Server.Users.Users                    (lookupUserId,
-                                                                     userIdToName)
+import           Distribution.Server.Packages.Types hiding (pkgLatestTarball, pkgLatestRevision, pkgSpecificRevision, pkgMetadataRevisions)
+import           Distribution.Server.Users.Types                    (UserId)
+import qualified Distribution.Server.Users.Types                    as Acid
+import           Distribution.Server.Users.Users                    (lookupUserId)
 
 -- Cabal
 import           Distribution.Package
@@ -73,9 +81,6 @@ data CoreFeature = CoreFeature {
     coreResource :: CoreResource,
 
     -- Queries
-    -- | Retrieves the entire main package index.
-    queryGetPackageIndex :: forall m. MonadIO m => m (PackageIndex PkgInfo),
-
     -- | Retrieve the raw tarball info
     queryGetIndexTarballInfo :: forall m. MonadIO m => m IndexTarballInfo,
 
@@ -260,10 +265,10 @@ data CoreResource = CoreResource {
     -- In the presence of deprecation or preferred versions,
     -- `withPackagePreferred` should generally be used instead for user-facing
     -- version resolution.
-    lookupPackageName :: PackageName -> ServerPartE [PkgInfo],
+    lookupPackageName :: PackageName -> ServerPartE [PkgInfoId],
     -- | Find a package version in the package DB, failing if not found. Behaves
     -- like `lookupPackageName` if the version is empty.
-    lookupPackageId   :: PackageId   -> ServerPartE PkgInfo
+    lookupPackageId   :: PackageId   -> ServerPartE PkgInfoId
 }
 
 initCoreFeature :: ServerEnv -> IO (UserFeature -> IO CoreFeature)
@@ -384,7 +389,7 @@ coreFeature :: ServerEnv
             -> ( CoreFeature
                , IO IndexTarballInfo )
 
-coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
+coreFeature ServerEnv{serverBlobStore = store, serverConnection} UserFeature{..}
             packagesState cacheIndexTarball
             packageChangeHook
             preIndexUpdateHook
@@ -504,9 +509,6 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
 
     -- Queries
     --
-    queryGetPackageIndex :: MonadIO m => m (PackageIndex PkgInfo)
-    queryGetPackageIndex = Acid.packageIndex <$> queryState packagesState Acid.GetPackagesState
-
     queryGetIndexTarballInfo :: MonadIO m => m IndexTarballInfo
     queryGetIndexTarballInfo = readAsyncCache cacheIndexTarball
 
@@ -530,7 +532,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
         Acid.AddPackage3
           pkginfo
           uploadinfo
-          (userName userInfo)
+          (Acid.userName userInfo)
           additionalEntries
 
       loginfo maxBound ("updateState(AddPackage3," ++ display pkgid ++ ") -> " ++ show successFlag)
@@ -557,7 +559,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           pkgid
           cabalfile
           uploadinfo
-          (userName userInfo)
+          (Acid.userName userInfo)
       loginfo maxBound ("updateState(AddPackageRevision2," ++ display pkgid ++ ") -> " ++ maybe "Nothing" (const "Just _") moldpkginfo)
       case moldpkginfo of
         Nothing ->
@@ -636,23 +638,29 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     packageError :: [MessageSpan] -> ServerPartE a
     packageError = errNotFound "Package not found"
 
-    lookupPackageName :: PackageName -> ServerPartE [PkgInfo]
-    lookupPackageName pkgname = do
-      pkgsIndex <- queryGetPackageIndex
-      case PackageIndex.lookupPackageName pkgsIndex pkgname of
-        []   -> packageError [MText "No such package in package index"]
-        pkgs -> return pkgs
+    lookupPackageName :: PackageName -> ServerPartE [PkgInfoId]
+    lookupPackageName name = do
+      res <- doSelectE serverConnection $ fmap Pkg.packageId $ orderBy (Pkg.packageVersion >$< asc) $ do
+        row <- each pkgInfoSchema
+        where_ $ Pkg.packageName row ==. lit name
+        pure row
+      case res of
+        [] -> packageError [MText "No such package in package index"]
+        _ -> pure res
 
-    lookupPackageId :: PackageId -> ServerPartE PkgInfo
-    lookupPackageId (PackageIdentifier name v) | nullVersion == v = do
-      pkgs <- lookupPackageName name
-      -- pkgs is sorted by version number and non-empty
-      return (last pkgs)
-    lookupPackageId pkgid = do
-      pkgsIndex <- queryGetPackageIndex
-      case PackageIndex.lookupPackageId pkgsIndex pkgid of
-        Just pkg -> return pkg
-        _ -> packageError [MText $ "No such package version for " ++ display (packageName pkgid)]
+
+    lookupPackageId :: PackageId -> ServerPartE PkgInfoId
+    lookupPackageId (PackageIdentifier name v) = do
+      res <-
+        doSelectE serverConnection $ fmap Pkg.packageId $ orderBy (Pkg.packageVersion >$< desc) $ limit 1 $ do
+          row <- each pkgInfoSchema
+          where_ $ Pkg.packageName row ==. lit name
+          when (v /= nullVersion) $
+            where_ $ Pkg.packageVersion row ==. lit v
+          pure row
+      case res of
+        [] -> packageError [MText $ "No such package version for " ++ display name]
+        (pkgid : _) -> pure pkgid
 
     ------------------------------------------------------------------------
 
@@ -685,9 +693,11 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     -- as we don't keep the parsed cabal files in memory)
     servePackageList :: DynamicPath -> ServerPartE Response
     servePackageList _ = do
-      pkgIndex <- queryGetPackageIndex
-      let pkgNames = PackageIndex.allPackageNames pkgIndex
-          list = map display pkgNames
+      pkgNames <-
+        doSelectE serverConnection $
+          orderBy asc $
+            fmap Pkg.packageName $ each pkgInfoSchema
+      let list = map display pkgNames
       -- We construct the JSON manually so that we control what it looks like;
       -- in particular, we use objects for the packages so that we can add
       -- additional fields later without (hopefully) breaking clients
@@ -703,11 +713,12 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
       pkgid <- packageTarballInPath dpath
       guard (pkgVersion pkgid /= nullVersion)
       pkg <- lookupPackageId pkgid
-      case pkgLatestTarball pkg of
+      fmap listToMaybe (doSelectE serverConnection $ pkgLatestTarball $ lit pkg) >>= \case
         Nothing -> errNotFound "Tarball not found"
                      [MText "No tarball exists for this package version."]
-        Just (tarball, (uploadtime, _uid), _revNo) -> do
-          let blobId = blobInfoId $ pkgTarballGz tarball
+        Just tarballRev -> do
+          let blobId = tarballBlobGz tarballRev
+              uploadtime = tarballTime tarballRev
           cacheControl [Public, NoTransform, maxAgeDays 30]
                        (BlobStorage.blobETag blobId)
           file <- liftIO $ BlobStorage.fetch store blobId
@@ -719,38 +730,49 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
     serveCabalFile dpath = do
       pkginfo <- packageInPath dpath >>= lookupPackageId
       -- check that the cabal name matches the package
-      guard (lookup "cabal" dpath == Just (display $ packageName pkginfo))
-      let (fileRev, (utime, _uid)) = pkgLatestRevision pkginfo
-          cabalfile = Resource.CabalFile (fromStrict $ cabalFileByteString fileRev) utime
+      -- UNDEFINED guard (lookup "cabal" dpath == Just (display $ packageName pkginfo))
+      rev <- doSelect1E serverConnection $ pkgLatestRevision $ lit pkginfo
+      let utime = metadataTime rev
+          fileRev = metadataCabalFile rev
+          cabalfile = Resource.CabalFile (fromStrict $ encodeUtf8 fileRev) utime
       return $ toResponse cabalfile
 
     serveCabalFileRevisionsList :: DynamicPath -> ServerPartE Response
     serveCabalFileRevisionsList dpath = do
-      revisions <- fmap pkgMetadataRevisions $ packageInPath dpath >>= lookupPackageId
-      users   <- queryGetUserDb
-      let revisionToObj rev (cabalFileText, (utime, uid)) =
-            let uname = userIdToName users uid
-                hash = sha256 (fromStrict $ cabalFileByteString cabalFileText)
+      pkgid <- packageInPath dpath >>= lookupPackageId
+      revisions <- doSelectE serverConnection $ orderBy ((metadataRevId . fst) >$< asc) $ do
+        rev <- pkgMetadataRevisions $ lit pkgid
+        user <- each usersSchema
+        where_ $ userId user ==. metadataUploader rev
+        pure (rev, userName user)
+      pure $ toResponse $ Array $ Vec.fromList $ revisions <&> \(rev, uname) ->
+            let
+                MetadataRevIx revid = metadataRevId rev
+                utime = metadataTime rev
+                cabalFileText = metadataCabalFile rev
+                hash = sha256 $ fromStrict $ encodeUtf8 cabalFileText
             in
             Object $ KeyMap.fromList
-              [ (Key.fromString "number", Number (fromIntegral rev))
+              [ (Key.fromString "number", Number (fromIntegral revid))
               , (Key.fromString "user", String (Text.pack (display uname)))
               , (Key.fromString "time", String (Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" utime)))
               , (Key.fromString "sha256", toJSON hash)
               ]
-          revisionsJson = Array $ Vec.imap revisionToObj revisions
-      return (toResponse revisionsJson)
+
 
     serveCabalFileRevision :: DynamicPath -> ServerPartE Response
     serveCabalFileRevision dpath = do
       pkginfo <- packageInPath dpath >>= lookupPackageId
       let mrev      = lookup "revision" dpath >>= fromReqURI
-      case mrev >>= pkgSpecificRevision pkginfo of
-        Just (fileRev, (utime, _uid)) -> return $ toResponse cabalfile
-          where
-            cabalfile = Resource.CabalFile (fromStrict $ cabalFileByteString fileRev) utime
+      case mrev of
         Nothing -> errNotFound "Package revision not found"
                      [MText "Cannot parse revision, or revision out of range."]
+        Just revid -> do
+          rev <- doSelect1E serverConnection $ pkgSpecificRevision (lit pkginfo) (lit revid)
+          let utime = metadataTime rev
+              fileRev = metadataCabalFile rev
+              cabalfile = Resource.CabalFile (fromStrict $ encodeUtf8 fileRev) utime
+          pure $ toResponse cabalfile
 
 
     deauth :: DynamicPath -> ServerPartE Response
@@ -759,6 +781,7 @@ coreFeature ServerEnv{serverBlobStore = store} UserFeature{..}
           rsCode = 401
         , rsHeaders   = mkHeaders [("Content-Type",  "text/html")]
       }
+
 
 packageExists, packageIdExists :: (Package pkg, Package pkg') => PackageIndex pkg -> pkg' -> Bool
 -- | Whether a package exists in the given package index.
