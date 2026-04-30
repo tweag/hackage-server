@@ -113,6 +113,9 @@ instance DBType PackageName where
           , decode = fmap (mkPackageName . T.unpack) $ decode ti
           }
 
+instance DBEq PackageName
+instance DBOrd PackageName
+
 instance DBType BlobId where
   typeInformation =
     let ti = typeInformation @Text
@@ -123,6 +126,9 @@ instance DBType BlobId where
       forceReadBlobId t = case readBlobId (T.unpack t) of
         Right b  -> b
         Left err -> error $ "DBType BlobId decode: " ++ err
+
+instance DBEq BlobId
+instance DBOrd BlobId
 
 instance DBType Version where
   typeInformation =

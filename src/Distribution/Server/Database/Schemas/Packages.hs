@@ -169,6 +169,11 @@ deriving via UserId instance DBType MetadataRevIx
 deriving via UserId instance DBType TarballRevIx
 
 
+instance DBEq MetadataRevIx
+instance DBOrd MetadataRevIx
+instance DBEq TarballRevIx
+instance DBOrd TarballRevIx
+
 -- ============================================================================
 -- Package Versions Table
 -- ============================================================================
