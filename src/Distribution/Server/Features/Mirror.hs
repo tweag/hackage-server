@@ -11,13 +11,16 @@ import Distribution.Server.Prelude
 import Distribution.Server.Framework
 
 import Distribution.Server.Features.Core
+import Distribution.Server.Framework.DB
+import Distribution.Server.Database.Schemas.Users hiding (userId)
+import qualified Distribution.Server.Database.Schemas.Users as DB
+import Distribution.Server.Database.Schemas.Packages hiding (packageId)
 import Distribution.Server.Features.Users
 
 import Distribution.Server.Users.State
-import Distribution.Server.Packages.Types
+import Distribution.Server.Packages.Types hiding (pkgLatestRevision)
 import Distribution.Server.Users.Backup
 import Distribution.Server.Users.Types
-import Distribution.Server.Users.Users hiding (lookupUserName)
 import Distribution.Server.Users.Group (UserGroup(..), GroupDescription(..), nullDescription)
 import qualified Distribution.Server.Framework.BlobStorage as BlobStorage
 import qualified Distribution.Server.Packages.Unpack as Upload
@@ -94,7 +97,7 @@ mirrorFeature :: ServerEnv
               -> GroupResource
               -> (MirrorFeature, UserGroup)
 
-mirrorFeature ServerEnv{serverBlobStore = store}
+mirrorFeature ServerEnv{serverBlobStore = store, serverConnection}
               CoreFeature{ coreResource = coreResource@CoreResource{
                              packageInPath
                            , packageTarballInPath
@@ -199,8 +202,12 @@ mirrorFeature ServerEnv{serverBlobStore = store}
 
     uploaderGet dpath = do
       pkg    <- packageInPath dpath >>= lookupPackageId
-      userdb <- queryGetUserDb
-      return $ toResponse $ display (userIdToName userdb (pkgLatestUploadUser pkg))
+      username <- doSelect1E serverConnection $ do
+        who <- fmap metadataUploader $ pkgLatestRevision $ lit pkg
+        user <- each usersSchema
+        where_ $ DB.userId user ==. who
+        pure $ DB.userName user
+      return $ toResponse $ display username
 
     uploaderPut :: DynamicPath -> ServerPartE Response
     uploaderPut dpath = do
@@ -217,8 +224,9 @@ mirrorFeature ServerEnv{serverBlobStore = store}
     uploadTimeGet :: DynamicPath -> ServerPartE Response
     uploadTimeGet dpath = do
       pkg <- packageInPath dpath >>= lookupPackageId
-      return $ toResponse $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
-                                       (pkgLatestUploadTime pkg)
+      utime <- doSelect1E serverConnection $ fmap metadataTime $ pkgLatestRevision $ lit pkg
+
+      return $ toResponse $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" utime
 
     -- curl -H 'Content-Type: text/plain' -u admin:admin -X PUT -d "Tue Oct 18 20:54:28 UTC 2010" http://localhost:8080/package/edit-distance-0.2.1/upload-time
     uploadTimePut :: DynamicPath -> ServerPartE Response

@@ -10,6 +10,7 @@ import Distribution.Server.Framework.ResponseContentTypes as Resource
 
 import Distribution.Server.Features.Core
 import Distribution.Server.Features.TarIndexCache
+import Distribution.Server.Database.Schemas.Packages
 
 import Distribution.Server.Packages.ChangeLog
 import Distribution.Server.Packages.Readme
@@ -22,7 +23,7 @@ import Distribution.Server.Util.Parse (unpackUTF8)
 import Distribution.Server.Pages.Template (hackagePage)
 
 import Distribution.Text
-import Distribution.Package
+import Distribution.Package hiding (packageId, packageName)
 import Distribution.PackageDescription
 
 import qualified Text.XHtml.Strict as XHtml
@@ -36,7 +37,7 @@ data PackageContentsFeature = PackageContentsFeature {
 
     -- necessary information for the representation of a package resource
     -- This needs to be here in order to extract from the tar file
-    packageRender :: PkgInfo -> IO PackageRender
+    packageRender :: PkgInfoId -> IO PackageRender
 }
 
 instance IsHackageFeature PackageContentsFeature where
@@ -97,11 +98,11 @@ packageContentsFeature CoreFeature{ coreResource = CoreResource{
               resourceGet = [("txt",  serveReadmeText)
                             ,("html", serveReadmeHtml)]
             }
-        , packageContentsChangeLogUri = \pkgid ->
-            renderResource (packageContentsChangeLog packageContentsResource) [display pkgid, display (packageName pkgid)]
+        , packageContentsChangeLogUri = \pkgid@(PackageIdentifier name _) ->
+            renderResource (packageContentsChangeLog packageContentsResource) [display pkgid, display name]
         }
 
-    packageRender :: PkgInfo -> IO PackageRender
+    packageRender :: PkgInfoId -> IO PackageRender
     packageRender pkg = do
         users <- queryGetUserDb
         changeLog <- findToplevelFile pkg isChangeLogFile

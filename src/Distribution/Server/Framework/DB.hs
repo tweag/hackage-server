@@ -74,6 +74,15 @@ doSelect1
     -> IO (Either SessionError (FromExprs exprs))
 doSelect1 conn = flip run conn . statement () . Rel8.run1 . select
 
+
+toIO :: IO (Either SessionError a) -> IO (Either String a)
+toIO ma = do
+  liftIO ma >>= \case
+    Left err -> do
+      lognotice normal $ show err
+      pure $ Left "DB error"
+    Right a -> pure $ Right a
+
 toE :: IO (Either SessionError a) -> ServerPartE a
 toE ma = do
   liftIO ma >>= \case

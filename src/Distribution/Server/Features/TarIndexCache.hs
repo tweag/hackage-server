@@ -13,18 +13,20 @@ import Data.Serialize (runGetLazy, runPutLazy)
 import Data.SafeCopy (safeGet, safePut)
 import Data.Maybe (listToMaybe)
 
+import Distribution.Package (PackageIdentifier(PackageIdentifier))
 import Distribution.Server.Framework
+import Distribution.Server.Framework.DB
 import Distribution.Server.Framework.BlobStorage
 import qualified Distribution.Server.Framework.BlobStorage as BlobStorage
 import Distribution.Server.Framework.BackupRestore
 import qualified Distribution.Server.Features.TarIndexCache.State as Acid
 import Distribution.Server.Features.Users
-import Distribution.Server.Packages.Types
 import Data.TarIndex
 import qualified Data.TarIndex as TarIndex
 import Distribution.Server.Util.ServeTarball (constructTarIndex)
-import Distribution.Package (packageId)
 import Distribution.Text (display)
+
+import Distribution.Server.Database.Schemas.Packages
 
 import qualified Data.Map as Map
 import Data.Aeson (toJSON)
@@ -32,9 +34,9 @@ import Data.Aeson (toJSON)
 data TarIndexCacheFeature = TarIndexCacheFeature {
     tarIndexCacheFeatureInterface :: HackageFeature
   , cachedTarIndex        :: BlobId -> IO TarIndex
-  , cachedPackageTarIndex :: PkgTarball -> IO TarIndex
-  , packageTarball :: PkgInfo -> IO (Either String (FilePath, ETag, TarIndex))
-  , findToplevelFile :: PkgInfo -> (FilePath -> Bool)
+  , cachedPackageTarIndex :: TarballRevisionRow Result -> IO TarIndex
+  , packageTarball :: PkgInfoId -> IO (Either String (FilePath, ETag, TarIndex))
+  , findToplevelFile :: PkgInfoId -> (FilePath -> Bool)
                      -> IO (Either String (FilePath, ETag, TarEntryOffset, FilePath))
   }
 
@@ -72,7 +74,7 @@ tarIndexCacheFeature :: ServerEnv
                      -> UserFeature
                      -> StateComponent AcidState Acid.TarIndexCache
                      -> TarIndexCacheFeature
-tarIndexCacheFeature ServerEnv{serverBlobStore = store}
+tarIndexCacheFeature ServerEnv{serverBlobStore = store, serverConnection}
                      UserFeature{..}
                      tarIndexCache =
    TarIndexCacheFeature{..}
@@ -115,8 +117,8 @@ tarIndexCacheFeature ServerEnv{serverBlobStore = store}
           updateState tarIndexCache (Acid.SetTarIndex tarBallBlobId tarIndexBlobId)
           return tarIndex
 
-    cachedPackageTarIndex :: PkgTarball -> IO TarIndex
-    cachedPackageTarIndex = cachedTarIndex . pkgTarballNoGz
+    cachedPackageTarIndex :: TarballRevisionRow Result -> IO TarIndex
+    cachedPackageTarIndex = cachedTarIndex . tarballBlobNoGz
 
     serveTarIndicesStatus :: ServerPartE Response
     serveTarIndicesStatus = do
@@ -136,31 +138,39 @@ tarIndexCacheFeature ServerEnv{serverBlobStore = store}
 
     -- Functions to access specific files in a tarball
 
-    packageTarball :: PkgInfo -> IO (Either String (FilePath, ETag, TarIndex))
-    packageTarball pkginfo
-      | Just (pkgTarball, _uploadinfo, _revNo) <- pkgLatestTarball pkginfo = do
-        let blobid = pkgTarballNoGz pkgTarball
-            fp     = BlobStorage.filepath store blobid
-            etag   = BlobStorage.blobETag blobid
-        index <- cachedPackageTarIndex pkgTarball
-        return $ Right (fp, etag, index)
-      | otherwise =
-        return $ Left "No tarball found"
+    packageTarball :: PkgInfoId -> IO (Either String (FilePath, ETag, TarIndex))
+    packageTarball pkginfo = runExceptT $ do
+      mtarball <-
+        fmap listToMaybe $ ExceptT $ toIO $
+          doSelect serverConnection $ pkgLatestTarball $ lit pkginfo
+      case mtarball of
+        Nothing ->
+          throwError "No tarball found"
+        Just rev -> do
+          let blobid = tarballBlobNoGz rev
+              fp     = BlobStorage.filepath store blobid
+              etag   = BlobStorage.blobETag blobid
+          index <- liftIO $ cachedPackageTarIndex rev
+          pure (fp, etag, index)
 
     -- TODO: Specify *what* file wasn't found in the error. This will require another parameter.
-    findToplevelFile :: PkgInfo -> (FilePath -> Bool)
+    findToplevelFile :: PkgInfoId -> (FilePath -> Bool)
                      -> IO (Either String (FilePath, ETag, TarEntryOffset, FilePath))
     findToplevelFile pkg test = runExceptT $ do
         (fp, etag, index) <- ExceptT $ packageTarball pkg
+        Just (pkgName, pkgVer) <-
+          fmap (listToMaybe) $ ExceptT $ toIO $
+            doSelect serverConnection $ do
+              package <- each pkgInfoSchema
+              where_ $ packageId package ==. lit pkg
+              pure (packageName package, packageVersion package)
+        let topdir = display $ PackageIdentifier pkgName pkgVer
         (offset, fname)   <- ExceptT $ return . maybe (Left "File not found") Right
-                                     $ findFile index
+                                     $ findFile topdir index
         return (fp, etag, offset, fname)
       where
-        topdir :: FilePath
-        topdir = display (packageId pkg)
-
-        findFile :: TarIndex -> Maybe (TarEntryOffset, String)
-        findFile index = do
+        findFile :: FilePath -> TarIndex -> Maybe (TarEntryOffset, String)
+        findFile topdir index = do
           TarDir fnames <- TarIndex.lookup index topdir
           listToMaybe $
             [ (offset, fname')
