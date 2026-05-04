@@ -202,7 +202,7 @@ recentFeed conf users hostURI now pkgs = RSS
     (start,end) = pageIndexRange conf
     desc = "Showing " ++ show start ++ " - " ++ show end ++ " most recent additions to Hackage, the Haskell package database."
     pkgList = paginate conf pkgs
-    updated = maybe now pkgOriginalUploadTime (listToMaybe pkgList)
+    updated = maybe now pkgLatestUploadTime (listToMaybe pkgList)
 
 recentRevisionsFeed :: PaginatedConfiguration -> Users -> URI -> UTCTime -> [PkgInfo] -> RSS
 recentRevisionsFeed conf users hostURI now pkgs = RSS
@@ -215,7 +215,7 @@ recentRevisionsFeed conf users hostURI now pkgs = RSS
     (start, end) = pageIndexRange conf
     desc = "Showing " ++ show start ++ " - " ++ show end ++ " most recent revisions to cabal metadata in Hackage, the Haskell package database."
     pkgList = paginate conf pkgs
-    updated = maybe now pkgOriginalUploadTime (listToMaybe pkgList)
+    updated = maybe now pkgLatestUploadTime (listToMaybe pkgList)
 
 channel :: UTCTime -> [RSS.ChannelElem]
 channel updated =
@@ -240,7 +240,7 @@ releaseItem users hostURI pkgInfo =
   where
     uri   = hostURI { uriPath = packageURL pkgId }
     title = display (packageName pkgId) ++ " " ++ display (packageVersion pkgId)
-    body  = fromShortText $ synopsis $ packageDescription $ pkgDesc $ pkgLatestRevision pkgInfo
+    body  = fromShortText $ synopsis $ packageDescription $ pkgDesc $ pkgOriginalRevision pkgInfo
     desc  = "<i>Added by " ++ display user ++ ", " ++ showTime time ++ ".</i>"
          ++ if null body then "" else "<p>" ++ body ++ "</p>"
     user = Users.userIdToName users userId
