@@ -19,6 +19,7 @@ module Distribution.Client.Mirror.Session (
   , Unlift(..)
   , askUnlift
   , mirrorFinally
+  , mirrorHandle
     -- * Errors
   , MirrorError(..)
   , Entity(..)
@@ -221,6 +222,11 @@ mirrorFinally :: MirrorSession a -> MirrorSession b -> MirrorSession a
 mirrorFinally a b = do
     run <- askUnlift
     liftIO $ unlift run a `finally` unlift run b
+
+mirrorHandle :: Exception e => (e -> MirrorSession a) -> MirrorSession a -> MirrorSession a
+mirrorHandle k m = do
+    run <- askUnlift
+    liftIO $ handle (\e -> unlift run $ k e) $ unlift run m
 
 mirrorAskHttpLib :: MirrorSession Sec.HttpLib
 mirrorAskHttpLib = MirrorSession $ do

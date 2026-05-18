@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Main (main) where
 
 -- stdlib
@@ -212,8 +214,9 @@ mirrorPackage verbosity opts sourceRepo targetRepo pkginfo = do
             notifyResponse (GetPackageFailed theError pkgid)
           Nothing -> do
             notifyResponse GetPackageOk
-            liftIO $ sanitiseTarball verbosity (stateDir opts) locTgz
-            uploadPackage targetRepo (mirrorUploaders opts) pkginfo locCab locTgz
+            mirrorHandle (\(e :: SomeException) -> liftIO $ putStrLn $ "An error occurred: " <> show e) $ do
+              liftIO $ sanitiseTarball verbosity (stateDir opts) locTgz
+              uploadPackage targetRepo (mirrorUploaders opts) pkginfo locCab locTgz
 
     removeTempFiles :: MirrorSession ()
     removeTempFiles = liftIO $ handle ignoreDoesNotExist $ do
