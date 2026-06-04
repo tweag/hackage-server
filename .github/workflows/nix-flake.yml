@@ -65,6 +65,15 @@ jobs:
         extra_nix_config: |
           trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= hackage-server.cachix.org-1:iw0iRh6+gsFIrxROFaAt5gKNgIHejKjIfyRdbpPYevY=
           substituters = https://cache.nixos.org/ https://hackage-server.cachix.org/
+          # The following settings just affect Linux, but are harmless on macOS.
+          extra-experimental-features = nix-command flakes auto-allocate-uids cgroups
+          # Let's just pretend we have KVM. It's a container test so
+          # actually we don't even need KVM --- I think it's a mistake
+          # that that the test derivation is even requesting this
+          # feature.
+          extra-system-features = uid-range kvm
+          auto-allocate-uids = true
+          use-cgroups = true
     - uses: cachix/cachix-action@v17
       with:
         # https://nix.dev/tutorials/continuous-integration-github-actions#setting-up-github-actions
