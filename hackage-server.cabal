@@ -569,6 +569,20 @@ executable hackage-import
     , async
     , csv
 
+executable hackage-import-users-json
+  import: exe-defaults
+
+  main-is: ImportUsersJson.hs
+
+  build-depends:
+      -- version constraints inherited from hackage-server
+    , acid-state
+    , aeson
+    , bytestring
+    , containers
+    , directory
+    , filepath
+
 ----------------------------------------------------------------------------
 
 common test-defaults
