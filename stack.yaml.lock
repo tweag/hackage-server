@@ -32,6 +32,30 @@ packages:
       size: 11523
   original:
     hackage: rel8-1.7.0.0
+- completed:
+    name: servant-ede
+    pantry-tree:
+      sha256: 4baa3f49f663871f555fa48774279f7005f3fc2394aa0ac65c965cdb74587b62
+      size: 915
+    sha256: aa17101cc6940070de5cc940b358cefec13f9e7f9e28c2caa3becb5f8b27926b
+    size: 9843
+    url: https://github.com/alpmestan/servant-ede/archive/8258b2057dbe42de3014c72b43127d6d5a14971d.tar.gz
+    version: 1.0.0.0
+  original:
+    url: https://github.com/alpmestan/servant-ede/archive/8258b2057dbe42de3014c72b43127d6d5a14971d.tar.gz
+- completed:
+    name: servant
+    pantry-tree:
+      sha256: 9755de5684c081fd8db8dabf80c529edf35799cd316e5ac4a6035a9e5bd337f4
+      size: 3527
+    sha256: 348bf25ed3e74bd5c67b11d616ce32e1599be2375ad1dff06d8b16ffe5760b42
+    size: 555989
+    subdir: servant
+    url: https://github.com/tweag/servant/archive/c6352177eb987960db00edc4cd90467dcb458f1c.tar.gz
+    version: 0.20.3.0
+  original:
+    subdir: servant
+    url: https://github.com/tweag/servant/archive/c6352177eb987960db00edc4cd90467dcb458f1c.tar.gz
 snapshots:
 - completed:
     sha256: 6406d8039dd538f18fc0d242f01c7066ee386d81ba3c8751b914ac1ae193ec5d
