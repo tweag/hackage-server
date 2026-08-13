@@ -199,6 +199,7 @@ data RunFlags = RunFlags {
     flagRunIP              :: Flag String,
     flagRunHostURI         :: Flag String,
     flagRunUserContentURI  :: Flag String,
+    flagRunV3SyncURI       :: Flag String,
     flagRunRequiredBaseHostHeader :: Flag String,
     flagRunStateDir        :: Flag FilePath,
     flagRunStaticDir       :: Flag FilePath,
@@ -219,6 +220,7 @@ defaultRunFlags = RunFlags {
     flagRunIP              = NoFlag,
     flagRunHostURI         = NoFlag,
     flagRunUserContentURI  = NoFlag,
+    flagRunV3SyncURI       = NoFlag,
     flagRunRequiredBaseHostHeader = NoFlag,
     flagRunStateDir        = NoFlag,
     flagRunStaticDir       = NoFlag,
@@ -273,6 +275,10 @@ runCommand =
           "Server's public user content base URI (for untrusted content, defeating XSS style attacks)"
           flagRunUserContentURI (\v flags -> flags { flagRunUserContentURI = v })
           (reqArgFlag "NAME")
+      , option [] ["v3-sync-uri"]
+          "Base URI of the v3 server to synchronize package changes to (optional)"
+          flagRunV3SyncURI (\v flags -> flags { flagRunV3SyncURI = v })
+          (reqArgFlag "URI")
       , option [] ["required-base-host-header"]
           "Required host header value for incoming requests (potentially internal, e.g. if behind reverse proxy). Base means that it is _not_ for the user-content domain."
           flagRunRequiredBaseHostHeader (\v flags -> flags { flagRunRequiredBaseHostHeader = v })
@@ -321,6 +327,7 @@ runAction opts = do
     ip         <- checkIPOpt      defaults (flagToMaybe (flagRunIP         opts))
     hosturi    <- checkHostURI    defaults (flagToMaybe (flagRunHostURI    opts)) port
     usercontenturi <- checkUserContentURI defaults (flagToMaybe (flagRunUserContentURI opts))
+    v3syncuri  <- checkV3SyncURI (flagToMaybe (flagRunV3SyncURI opts))
     requiredbasehostheader <- checkRequiredBaseHostHeader defaults (flagToMaybe (flagRunRequiredBaseHostHeader opts))
     cacheDelay <- checkCacheDelay defaults (flagToMaybe (flagRunCacheDelay opts))
     let stateDir  = fromFlagOrDefault (confStateDir  defaults) (flagRunStateDir  opts)
@@ -333,6 +340,7 @@ runAction opts = do
         config    = defaults {
                         confHostUri    = hosturi,
                         confUserContentUri = usercontenturi,
+                        confV3SyncUri  = v3syncuri,
                         confRequiredBaseHostHeader = requiredbasehostheader,
                         confListenOn   = listenOn,
                         confStateDir   = stateDir,
@@ -415,6 +423,12 @@ runAction opts = do
 
     checkUserContentURI _ Nothing    = fail "You must provide the --user-content-uri= flag"
     checkUserContentURI _ (Just str) = validateURI str
+
+    checkV3SyncURI Nothing    = return Nothing
+    checkV3SyncURI (Just str) = case parseAbsoluteURI str of
+      Nothing  -> fail $ "Cannot parse --v3-sync-uri as a URI: " ++ str ++ "\n"
+                      ++ "Make sure you include the http:// part"
+      Just uri -> return (Just uri)
 
     checkRequiredBaseHostHeader _ Nothing    = fail "You must provide the --required-base-host-header= flag. It's typically the host part of the base-uri."
     checkRequiredBaseHostHeader _ (Just str) = pure str

@@ -73,6 +73,10 @@ data ServerEnv = ServerEnv {
     -- increasing the time taken to update the cache we can push this further.
     serverCacheDelay :: Int,
 
+    -- | The base URI of the v3 server to synchronize package changes to,
+    -- if any.
+    serverV3SyncURI :: Maybe URI.URI,
+
     serverVerbosity  :: Verbosity
 }
 

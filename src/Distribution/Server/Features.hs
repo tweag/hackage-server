@@ -51,6 +51,7 @@ import Distribution.Server.Features.Sitemap             (initSitemapFeature)
 import Distribution.Server.Features.UserNotify          (initUserNotifyFeature)
 import Distribution.Server.Features.PackageFeed         (initPackageFeedFeature)
 import Distribution.Server.Features.Vouch               (initVouchFeature)
+import Distribution.Server.Features.V3Synchronize       (initV3SynchronizeFeature)
 #endif
 import Distribution.Server.Features.ServerIntrospect (serverIntrospectFeature)
 
@@ -163,6 +164,8 @@ initHackageFeatures env@ServerEnv{serverVerbosity = verbosity} = do
                                initBrowseFeature env
     mkPackageJSONFeature    <- logStartup "package info JSON" $
                                initPackageInfoJSONFeature env
+    mkV3SynchronizeFeature  <- logStartup "v3 synchronize" $
+                               initV3SynchronizeFeature env
 #endif
 
     loginfo verbosity "Initialising features, part 2"
@@ -374,6 +377,9 @@ initHackageFeatures env@ServerEnv{serverVerbosity = verbosity} = do
                                 versionsFeature
                                 usersFeature
 
+    v3SynchronizeFeature <- mkV3SynchronizeFeature
+                              coreFeature
+
 #endif
 
     -- The order of initialization above should be the same as
@@ -417,6 +423,7 @@ initHackageFeatures env@ServerEnv{serverVerbosity = verbosity} = do
          , getFeatureInterface packageFeedFeature
          , getFeatureInterface packageInfoJSONFeature
          , getFeatureInterface vouchFeature
+         , getFeatureInterface v3SynchronizeFeature
 #endif
          , staticFilesFeature
          , serverIntrospectFeature allFeatures

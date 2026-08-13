@@ -333,6 +333,7 @@ library
     Distribution.Server.Features.UserNotify.Acid
     Distribution.Server.Features.UserNotify.Backup
     Distribution.Server.Features.UserNotify.Types
+    Distribution.Server.Features.V3Synchronize
 
 
   if flag(minimal)
