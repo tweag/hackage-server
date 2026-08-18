@@ -8,13 +8,16 @@ module Distribution.Server.Features.V3Synchronize (
 import Data.Foldable
 import Data.Proxy (Proxy(..))
 import Distribution.Server.Features.Core
+import Distribution.Server.Features.Users
 import Distribution.Server.Framework
 import Distribution.Server.Packages.Types (pkgLatestTarball, pkgTarballNoGz)
+import Distribution.Server.Users.Types (unUserId, unUserName)
 import Hackage.SyncAPI.Type
 import Hackage.Types
 import Network.HTTP.Client (newManager, defaultManagerSettings)
 import Servant.API.NamedRoutes
 import Servant.Client
+import qualified Data.Text as T
 import qualified Distribution.Server.Framework.BlobStorage as BlobStorage
 
 
@@ -36,21 +39,23 @@ toSyncBlobId = fmap BlobId . parseMD5 . BlobStorage.blobMd5
 
 
 initV3SynchronizeFeature :: ServerEnv
-                         -> IO (CoreFeature -> IO V3SynchronizeFeature)
+                         -> IO (UserFeature -> IO V3SynchronizeFeature)
 initV3SynchronizeFeature ServerEnv{serverV3SyncURI} = do
-  pure $ \CoreFeature{packageChangeHook} -> do
+  pure $ \UserFeature{userAdded} -> do
     for_ serverV3SyncURI  $ \uri -> do
       manager <- newManager defaultManagerSettings
       baseUrl <- parseBaseUrl (show uri)
       let clientEnv = mkClientEnv manager baseUrl
 
-      registerHookJust packageChangeHook isPackageChangeAny $ \(_pkgid, mpkginfo) ->
-        for_ (pkgLatestTarball =<< mpkginfo) $ \(tarball, _uploadinfo, _revno) ->
-          case toSyncBlobId (pkgTarballNoGz tarball) of
-            Left err -> putStrLn $ "v3-synchronize: bad blob id: " ++ err
-            Right blobid -> do
-              res <- runClientM (sync_api_index_blob syncClient blobid) clientEnv
-              print res
+      registerHook userAdded $ \(UserNameIdResource uname uid) -> do
+        res <-
+          runClientM
+            (sync_api_new_user syncClient $
+              NewUserReq
+                (UserName $ T.pack $ unUserName uname)
+                (UserId $ fromIntegral $ unUserId uid)
+            ) clientEnv
+        print res
 
     pure V3SynchronizeFeature {
       v3SynchronizeFeatureInterface = (emptyHackageFeature "v3-synchronize") {

@@ -29,10 +29,10 @@ import Data.Hashable
 import Data.Serialize (Serialize)
 
 
-newtype UserId = UserId Int
+newtype UserId = UserId { unUserId :: Int }
   deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Pretty)
 
-newtype UserName  = UserName String
+newtype UserName  = UserName { unUserName :: String }
   deriving newtype (Eq, Ord, Read, Show, MemSize, ToJSON, FromJSON, Hashable, Serialize)
 
 data UserInfo = UserInfo {

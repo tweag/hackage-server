@@ -378,7 +378,7 @@ initHackageFeatures env@ServerEnv{serverVerbosity = verbosity} = do
                                 usersFeature
 
     v3SynchronizeFeature <- mkV3SynchronizeFeature
-                              coreFeature
+                              usersFeature
 
 #endif
 

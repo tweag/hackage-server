@@ -7,6 +7,7 @@ module Distribution.Server.Features.Users (
     UserResource(..),
 
     GroupResource(..),
+    UserNameIdResource(..),
   ) where
 
 import Distribution.Server.Framework
@@ -49,8 +50,8 @@ data UserFeature = UserFeature {
     -- | User resources.
     userResource :: UserResource,
 
-    -- | Notification that a user has been added. Currently unused.
-    userAdded :: Hook () (), --TODO: delete, other status changes?
+    -- | Notification that a user has been added.
+    userAdded :: Hook UserNameIdResource (),
     -- | The admin user group, including its description, members, and
     -- modification thereof.
     adminGroup :: UserGroup,
@@ -298,7 +299,7 @@ userFeature :: Templates
             -> StateComponent AcidState Acid.Users
             -> StateComponent AcidState Acid.HackageAdmins
             -> MemState GroupIndex
-            -> Hook () ()
+            -> Hook UserNameIdResource ()
             -> Hook Auth.AuthError (Maybe ErrorResponse)
             -> Hook (GroupDescription, Bool, UserId, UserId, String) ()
             -> UserGroup
@@ -400,7 +401,18 @@ userFeature templates usersState adminsState
     queryGetUserDb = queryState usersState Acid.GetUserDb
 
     updateAddUser :: MonadIO m => UserName -> UserAuth -> m (Either Acid.ErrUserNameClash UserId)
-    updateAddUser uname auth = updateState usersState (Acid.AddUserEnabled uname auth)
+    updateAddUser uname auth = do
+      r <- updateState usersState (Acid.AddUserEnabled uname auth)
+      case r of
+        Left _ -> pure ()
+        Right uid -> do
+          let res =
+                UserNameIdResource {
+                        ui_username = uname,
+                        ui_userid   = uid
+                      }
+          runHook_ userAdded res
+      pure r
 
     updateSetUserEnabledStatus :: MonadIO m => UserId -> Bool
                                -> m (Maybe (Either Acid.ErrNoSuchUserId Acid.ErrDeletedUser))
@@ -560,11 +572,14 @@ userFeature templates usersState adminsState
         Left  Acid.ErrUserNameClash ->
           errBadRequest "Username already exists"
             [MText "Cannot create a new user account with that username because already exists"]
-        Right uid -> return . toResponse $
-          toJSON UserNameIdResource {
-                   ui_username = username,
-                   ui_userid   = uid
-                 }
+        Right uid -> do
+          let res =
+                UserNameIdResource {
+                        ui_username = username,
+                        ui_userid   = uid
+                      }
+          runHook_ userAdded res
+          return . toResponse $ toJSON res
 
     serveUserDelete :: DynamicPath -> ServerPartE Response
     serveUserDelete dpath = do
@@ -720,7 +735,14 @@ userFeature templates usersState adminsState
           muid <- updateState usersState $ Acid.AddUserEnabled uname auth
           case muid of
             Left Acid.ErrUserNameClash -> errForbidden "Error registering user" [MText "A user account with that user name already exists."]
-            Right _                     -> return uname
+            Right uid -> do
+              let res =
+                    UserNameIdResource {
+                            ui_username = uname,
+                            ui_userid   = uid
+                          }
+              runHook_ userAdded res
+              return uname
 
     -- Arguments: the auth'd user id, the user path id (derived from the :username)
     canChangePassword :: MonadIO m => UserId -> UserId -> m Bool
