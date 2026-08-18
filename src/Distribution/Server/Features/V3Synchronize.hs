@@ -1,5 +1,7 @@
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE NamedFieldPuns                  #-}
+{-# LANGUAGE TypeApplications                #-}
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
+
 module Distribution.Server.Features.V3Synchronize (
     V3SynchronizeFeature(..),
     initV3SynchronizeFeature,
@@ -10,7 +12,6 @@ import Data.Proxy (Proxy(..))
 import Distribution.Server.Features.Core
 import Distribution.Server.Features.Users
 import Distribution.Server.Framework
-import Distribution.Server.Packages.Types (pkgLatestTarball, pkgTarballNoGz)
 import Distribution.Server.Users.Types (unUserId, unUserName)
 import Hackage.SyncAPI.Type
 import Hackage.Types
@@ -19,6 +20,8 @@ import Servant.API.NamedRoutes
 import Servant.Client
 import qualified Data.Text as T
 import qualified Distribution.Server.Framework.BlobStorage as BlobStorage
+import Distribution.Server.Packages.Types
+import qualified Data.Vector as V
 
 
 data V3SynchronizeFeature = V3SynchronizeFeature
@@ -39,14 +42,16 @@ toSyncBlobId = fmap BlobId . parseMD5 . BlobStorage.blobMd5
 
 
 initV3SynchronizeFeature :: ServerEnv
-                         -> IO (UserFeature -> IO V3SynchronizeFeature)
+                         -> IO (CoreFeature -> UserFeature -> IO V3SynchronizeFeature)
 initV3SynchronizeFeature ServerEnv{serverV3SyncURI} = do
-  pure $ \UserFeature{userAdded} -> do
+  pure $ \CoreFeature{packageChangeHook} UserFeature{userAdded} -> do
     for_ serverV3SyncURI  $ \uri -> do
       manager <- newManager defaultManagerSettings
       baseUrl <- parseBaseUrl (show uri)
       let clientEnv = mkClientEnv manager baseUrl
 
+
+      -- User add hook
       registerHook userAdded $ \(UserNameIdResource uname uid) -> do
         res <-
           runClientM
@@ -54,6 +59,23 @@ initV3SynchronizeFeature ServerEnv{serverV3SyncURI} = do
               NewUserReq
                 (UserName $ T.pack $ unUserName uname)
                 (UserId $ fromIntegral $ unUserId uid)
+            ) clientEnv
+        print res
+
+      -- New package hook
+      registerHookJust packageChangeHook isPackageAdd $ \ (PkgInfo pid metarevs tarrevs) -> do
+        let (CabalFileText cabal, (time, uid)) = V.head metarevs
+            (PkgTarball (BlobInfo gz _ _) nogz, _) = V.head tarrevs
+        res <-
+          runClientM
+            (sync_api_new_package syncClient pid $
+              NewPackageReq
+                { npr_uploader = UserId $ fromIntegral $ unUserId uid
+                , npr_uploadTime = time
+                , npr_cabalFile = cabal
+                , npr_blobGz = either error id $ toSyncBlobId gz
+                , npr_blobNoGz = either error id $ toSyncBlobId nogz
+                }
             ) clientEnv
         print res
 

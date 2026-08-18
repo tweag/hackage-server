@@ -205,12 +205,13 @@ isPackageDelete _                             = Nothing
 isPackageIndexChange ::  PackageChange -> Maybe PackageChange
 isPackageIndexChange = Just
 
+isPackageChangeMetaRev :: PackageChange -> Maybe (PackageId, (CabalFileText, UploadInfo))
+isPackageChangeMetaRev = _
+
 {-
 -- Other examples we may want later...
 isPackageAddVersion                :: Maybe PackageId,
 isPackageDeleteVersion             :: Maybe PackageId,
-isPackageChangeCabalFile           :: Maybe (PackageId, CabalFileText),
-isPackageChangeCabalFileUploadInfo :: Maybe (PackageId, UploadInfo),
 isPackageChangeTarball             :: Maybe (PackageId, PkgTarball),
 isPackageIndexExtraChange          :: Maybe (String, LazyByteString, UTCTime)
 -}
