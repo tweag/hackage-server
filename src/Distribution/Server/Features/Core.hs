@@ -14,6 +14,8 @@ module Distribution.Server.Features.Core (
     isPackageAdd,
     isPackageDelete,
     isPackageIndexChange,
+    isPackageChangeMetaRev,
+    isPackageChangeTarballRev,
 
     -- * Misc other utils
     packageExists,
@@ -205,8 +207,15 @@ isPackageDelete _                             = Nothing
 isPackageIndexChange ::  PackageChange -> Maybe PackageChange
 isPackageIndexChange = Just
 
-isPackageChangeMetaRev :: PackageChange -> Maybe (PackageId, (CabalFileText, UploadInfo))
-isPackageChangeMetaRev = _
+isPackageChangeMetaRev :: PackageChange -> Maybe (PackageId, MetadataRevIx, (CabalFileText, UploadInfo))
+isPackageChangeMetaRev (PackageChangeInfo PackageUpdatedCabalFile _ (PkgInfo pid revs _)) =
+  Just (pid, MetadataRevIx $ Vec.length revs - 1, Vec.last revs)
+isPackageChangeMetaRev _ = Nothing
+
+isPackageChangeTarballRev :: PackageChange -> Maybe (PackageId, TarballRevIx, (PkgTarball, UploadInfo))
+isPackageChangeTarballRev (PackageChangeInfo PackageUpdatedCabalFile _ (PkgInfo pid _ tarballs)) =
+  Just (pid, TarballRevIx $ Vec.length tarballs - 1, Vec.last tarballs)
+isPackageChangeTarballRev _ = Nothing
 
 {-
 -- Other examples we may want later...
