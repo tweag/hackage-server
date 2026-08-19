@@ -8,7 +8,9 @@ extra-deps:
 - Cabal-syntax-3.16.1.0
 - tar-0.7.2.0
 - rel8-1.7.0.0
-- ../hackage-server-v3/hackage-api
+- github: tweag/hackage-server-v3
+  commit: 316b824d5a99587cab2978329b1984a91280986e
+  subdir: hackage-api
 - github: tweag/ede
   commit: 70d34146d01a3766f2aef1a580e4224238ed6f90
 - github: alpmestan/servant-ede

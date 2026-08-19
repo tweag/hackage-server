@@ -33,6 +33,19 @@ packages:
   original:
     hackage: rel8-1.7.0.0
 - completed:
+    name: hackage-api
+    pantry-tree:
+      sha256: defe98676012765a0cddc85eb77cade93de3de8d8232a0f82e7e001681fa0e14
+      size: 1608
+    sha256: e2b8a4e90ee4eaec5d5d77897303b89fcdd789ec9e9ae2be8e0a91588bc320ce
+    size: 73723
+    subdir: hackage-api
+    url: https://github.com/tweag/hackage-server-v3/archive/316b824d5a99587cab2978329b1984a91280986e.tar.gz
+    version: 0.1.0.0
+  original:
+    subdir: hackage-api
+    url: https://github.com/tweag/hackage-server-v3/archive/316b824d5a99587cab2978329b1984a91280986e.tar.gz
+- completed:
     name: ede
     pantry-tree:
       sha256: 51f0fb56845663f47e7aa3da21e206373bc169e2066f483d0cf3310122cda25b
