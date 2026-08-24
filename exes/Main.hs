@@ -24,6 +24,8 @@ import System.Exit
          ( exitWith, ExitCode(..) )
 import Control.Exception
          ( bracket )
+import qualified OpenTelemetry.Trace as OTel
+         ( initializeGlobalTracerProvider, shutdownTracerProvider )
 import System.Posix.Signals as Signal
          ( Signal
          , installHandler
@@ -206,6 +208,7 @@ data RunFlags = RunFlags {
     flagRunTemp            :: Flag Bool,
     flagRunCacheDelay      :: Flag String,
     flagRunLiveTemplates   :: Flag Bool,
+    flagRunOpenTelemetry   :: Flag Bool,
     -- Online backup flags
     flagRunBackupOutputDir :: Flag FilePath,
     flagRunBackupLinkBlobs :: Flag Bool,
@@ -226,6 +229,7 @@ defaultRunFlags = RunFlags {
     flagRunTemp            = Flag False,
     flagRunCacheDelay      = NoFlag,
     flagRunLiveTemplates   = Flag False,
+    flagRunOpenTelemetry   = Flag False,
     flagRunBackupOutputDir = Flag "backups",
     flagRunBackupLinkBlobs = Flag False,
     flagRunBackupScrubbed  = Flag False
@@ -311,6 +315,10 @@ runCommand =
           "Do not cache templates, for quicker feedback during development."
           flagRunLiveTemplates (\v flags -> flags { flagRunLiveTemplates = v })
           (noArg (Flag True))
+      , option [] ["enable-opentelemetry"]
+          ("Initialize the OpenTelemetry SDK and export traces. Exporters and endpoints are configured via the standard OTEL_* environment variables.")
+          flagRunOpenTelemetry (\v flags -> flags { flagRunOpenTelemetry = v })
+          (noArg (Flag True))
       ]
 
 runAction :: RunFlags -> IO ()
@@ -369,7 +377,8 @@ runAction opts = do
           lognotice verbosity "Done"
 
     let useTempServer = fromFlag (flagRunTemp opts)
-    withServer config useTempServer $ \server ->
+    withOpenTelemetry (fromFlag $ flagRunOpenTelemetry opts) $
+      withServer config useTempServer $ \server ->
       withHandler sigUSR1 (checkpointHandler server) $
       withHandler sigUSR2 (backupHandler server) $
       withHandler sigHUP  (reloadHandler server) $ do
@@ -378,6 +387,24 @@ runAction opts = do
 
   where
     verbosity = fromFlag (flagRunVerbosity opts)
+
+    withOpenTelemetry
+        :: Bool  -- is telemetry enabled?
+        -> IO a
+        -> IO a
+    withOpenTelemetry = \case
+      False -> id
+      True ->
+        bracket
+          ( do
+              lognotice verbosity "Initializing OpenTelemetry SDK..."
+              OTel.initializeGlobalTracerProvider
+          )
+          (\tp -> do
+              lognotice verbosity "Shutting down OpenTelemetry SDK..."
+              void $ OTel.shutdownTracerProvider tp Nothing
+          )
+          . const
 
     -- Option handling:
     --

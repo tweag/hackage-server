@@ -43,15 +43,22 @@ import Distribution.Server.Framework.HappstackUtils (remainingPathString, uriEsc
 import Distribution.Server.Util.ContentType (parseContentAccept)
 import Distribution.Server.Framework.Error
 
+import qualified Control.Exception.Lifted as Lifted
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Function (on)
 import Data.List (intercalate, unionBy, elemIndices, find, isSuffixOf)
+import Data.String (fromString)
+import qualified Data.Text as T
 import qualified Text.ParserCombinators.Parsec as Parse
 
 import System.FilePath.Posix ((</>), (<.>))
 import qualified Data.Tree as Tree (Tree(..), drawTree)
 import qualified Data.ByteString.Char8 as BS -- Used for accept header only
+
+import qualified OpenTelemetry.Trace.Core as OTel
+import qualified OpenTelemetry.Context as OTelCtx
+import qualified OpenTelemetry.Context.ThreadLocal as OTelTL
 
 type Content = String
 
@@ -378,13 +385,80 @@ parseFormatTrunkAt = do
     untilNext :: Parse.Parser String
     untilNext = Parse.many1 (Parse.noneOf "/")
 
+-- | Obtain the OpenTelemetry tracer used to record the handling of resources.
+getHackageTracer :: MonadIO m => m OTel.Tracer
+getHackageTracer = do
+    tp <- OTel.getGlobalTracerProvider
+    pure $ OTel.makeTracer tp (fromString "hackage-server") OTel.tracerOptions
+
+-- | Render a 'BranchPath' back into a human readable route template.
+renderBranchPathTemplate :: BranchPath -> String
+renderBranchPathTemplate loc = '/' : intercalate "/" (fmap comp $ reverse loc)
+  where
+    comp (StaticBranch  s) = s
+    comp (DynamicBranch s) = ':' : s
+    comp TrailingBranch    = "..."
+
+-- | Wrap the handling of a resource in a fresh OpenTelemetry span.
+withResourceSpan
+    :: BranchPath
+    -> ResourceFormat
+    -> DynamicPath
+    -> ServerPartE Response
+    -> ServerPartE Response
+withResourceSpan rloc rformat dpath act = do
+    rq     <- askRq
+    tracer <- getHackageTracer
+    ctx    <- OTelTL.getContext
+    let httpMethod  = show (rqMethod rq)
+        theUri      = rqUri rq
+        rawQuery    = dropWhile (== '?') (rqQuery rq)
+        scheme      = if rqSecure rq then "https" else "http"
+        route = renderBranchPathTemplate rloc
+        (peerHost, peerPort) = rqPeer rq
+        -- The span name follows the HTTP convention of "{method} {route}".
+        spanName    = httpMethod ++ " " ++ route
+        spanArgs    = OTel.defaultSpanArguments { OTel.kind = OTel.Server }
+    sp <- OTel.createSpan tracer ctx (T.pack spanName) spanArgs
+
+    -- Standard HTTP semantic-convention attributes.
+    OTel.addAttribute sp (T.pack "http.request.method")   $ T.pack httpMethod
+    OTel.addAttribute sp (T.pack "http.route")            $ T.pack route
+    OTel.addAttribute sp (T.pack "url.path")              $ T.pack theUri
+    OTel.addAttribute sp (T.pack "url.scheme")            $ T.pack scheme
+    OTel.addAttribute sp (T.pack "network.peer.address")  $ T.pack peerHost
+    OTel.addAttribute sp (T.pack "network.peer.port")     (fromIntegral peerPort :: Int)
+    unless (null rawQuery) $
+      OTel.addAttribute sp (T.pack "url.query")           $ T.pack rawQuery
+    forM_ (getHeader "Host" rq) $ \host ->
+      OTel.addAttribute sp (T.pack "server.address")      $ T.pack $ BS.unpack host
+    forM_ (getHeader "User-Agent" rq) $ \ua ->
+      OTel.addAttribute sp (T.pack "user_agent.original") $ T.pack $ BS.unpack ua
+
+    -- Hackage-specific attributes.
+    OTel.addAttribute sp (T.pack "hackage.resource")        $ T.pack route
+    OTel.addAttribute sp (T.pack "hackage.resource.format") $ T.pack $ show rformat
+    forM_ dpath $ \(k, v) -> OTel.addAttribute sp (T.pack $ "hackage.capture." <> k) $ T.pack v
+
+    _ <- OTelTL.attachContext $ OTelCtx.insertSpan sp ctx
+    Lifted.finally
+      ( do
+          resp <- act
+          OTel.addAttribute sp (T.pack "http.response.status_code") (rsCode resp :: Int)
+          pure resp
+      )
+      ( do
+          OTel.endSpan sp Nothing
+          void $ OTelTL.attachContext ctx
+      )
+
 -- serveResource does all the path format and HTTP method preprocessing for a Resource
 --
 -- For a small curl-based testing mini-suite of [Resource]:
 -- [res "/foo" ["json"], res "/foo/:bar.:format" ["html", "json"], res "/baz/test/.:format" ["html", "text", "json"], res "/package/:package/:tarball.tar.gz" ["tarball"], res "/a/:a/:b/" ["html", "json"], res "/mon/..." [""], res "/wiki/path.:format" [], res "/hi.:format" ["yaml", "blah"]]
 --     where res field formats = (resourceAt field) { resourceGet = map (\format -> (format, \_ -> return . toResponse . (++"\n") . ((show format++" - ")++) . show)) formats }
 serveResource :: [(Content, ServerErrorResponse)] -> Resource -> ServerResponse
-serveResource errRes (Resource _ rget rput rpost rdelete rformat rend _) = \dpath -> msum $
+serveResource errRes (Resource rloc rget rput rpost rdelete rformat rend _) = \dpath -> msum $
     map (\func -> func dpath) $ methodPart ++ [optionPart]
   where
     optionPart = makeOptions $ concat [ met | ((_:_), met) <- zip methods methodsList]
@@ -392,7 +466,10 @@ serveResource errRes (Resource _ rget rput rpost rdelete rformat rend _) = \dpat
     methods = [rget, rput, rpost, rdelete]
     methodsList = [[GET, HEAD], [PUT], [POST], [DELETE]]
     makeOptions :: [Method] -> ServerResponse
-    makeOptions methodList = \_ -> method OPTIONS >> nullDir >> do
+    makeOptions methodList = \dpath -> do
+      method OPTIONS
+      nullDir
+      withResourceSpan rloc rformat dpath $ do
         setHeaderM "Allow" (intercalate ", " . map show $ methodList)
         return $ toResponse ()
     -- some of the dpath lookup calls can be replaced by pattern matching the head/replacing
@@ -459,7 +536,7 @@ serveResource errRes (Resource _ rget rput rpost rdelete rformat rend _) = \dpat
           case lookup "format" dpath of
             Just format@(_:_) -> case lookup format res of
                                -- return a specific format if it is found
-                Just answer -> handleErrors (Just format) $ answer dpath
+                Just answer -> handleErrors (Just format) $ withResourceSpan rloc rformat dpath $ answer dpath
                 Nothing -> mzero -- return 404 if the specific format is not found
                   -- return default response when format is empty or non-existent
             _ -> do
@@ -469,7 +546,7 @@ serveResource errRes (Resource _ rget rput rpost rdelete rformat rend _) = \dpat
                     Just x -> x
                     Nothing -> head res
               (format,answer) <- negotiateContent contentResponsePair res
-              handleErrors (Just format) $ answer dpath
+              handleErrors (Just format) $ withResourceSpan rloc rformat dpath $ answer dpath
 
     handleErrors format =
       handleErrorResponse (serveErrorResponse errRes format)
