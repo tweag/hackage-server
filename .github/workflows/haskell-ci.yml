@@ -178,6 +178,7 @@ jobs:
           touch cabal.project.local
           echo "packages: ${PKGDIR_hackage_server}" >> cabal.project
           cat >> cabal.project <<EOF
+          allow-newer: lens-family:containers, lens-family-core:containers
           EOF
           $HCPKG list --simple-output --names-only | perl -ne 'for (split /\s+/) { print "constraints: any.$_ installed\n" unless /^(Cabal|Cabal-syntax|hackage-server|parsec|process|text)$/; }' >> cabal.project.local
           cat cabal.project

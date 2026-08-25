@@ -21,6 +21,13 @@ apt: libbrotli-dev libgd-dev
 haddock-components: all
   -- since haskell-ci 0.15.20220822
 
+
+-- On GHC 9.14.1 the boot library `containers-0.8` is used but `lens-family` 
+-- (pulled in transitively via `hs-opentelemetry-sdk`) constrains 
+-- `containers < 0.8`.
+raw-project
+  allow-newer: lens-family:containers, lens-family-core:containers
+
 -- tests: >= 9.4
 --   -- parallel-doctest uses the ghc package
 --   -- and thus does not build with Cabal-3.8.1.0 below GHC 9.4
